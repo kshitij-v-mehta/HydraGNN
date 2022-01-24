@@ -14,7 +14,7 @@ class AdiosWriter_1:
     """
     This implementation creates a BP file in which total_energy, nodal_input, and nodal_output
     are variables. We write an adios step for each graph.
-    Pros: A compact structure that has low metadata overhead.
+    Pros: A compact structure that may have low metadata overhead.
     Cons: Cannot do data parallelism as it cannot write graphs (== adios steps) in parallel
     """
     def __init__(self):
@@ -63,7 +63,7 @@ class AdiosWriter_2:
     the total energy, nodal input, and nodal output.
     Pros: Allows data parallelism, as each rank can writes its own graph (== adios variables) 
     separately.
-    Cons: This is not a compact format. The metadata overhead is higher.
+    Cons: This is not a compact format. The metadata overhead could be higher (needs to be verified).
     """
     def __init__(self):
         self.adios = adios2.ADIOS(MPI.COMM_SELF)
