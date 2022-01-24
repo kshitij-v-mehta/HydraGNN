@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import shutil
 import numpy as np
@@ -5,24 +6,68 @@ from tqdm import tqdm
 from sympy.utilities.iterables import multiset_permutations
 import scipy.special
 import math
+from mpi4py import MPI
+import adios2
 
 
-def write_to_file(total_energy, atomic_features, count_config, dir):
+class AdiosWriter:
+    def __init__(self):
+        self.adios = adios2.ADIOS(MPI.COMM_SELF)
+        self.io = self.adios.DeclareIO("ioWriter")
+        
+        totalenergy_type = np.array([0], dtype=np.float64)
+        nodal_type = np.array([3,3,3], dtype=np.float64)
+
+        self.var_totalenergy = self.io.DefineVariable("Total_energy", totalenergy_type, [], [], [1],     adios2.ConstantDims)
+        self.var_nodalinput  = self.io.DefineVariable("Nodal_input",  nodal_type,       [], [], [3,3,3], adios2.ConstantDims)
+        self.var_nodaloutput = self.io.DefineVariable("Nodal_output", nodal_type,       [], [], [3,3,3], adios2.ConstantDims)
+        
+        self.f = self.io.Open("ising_dataset.bp", adios2.Mode.Write, MPI.COMM_SELF)
+
+
+    def write(self, total_energy, atomic_features, count_config, dirpath):
+        # 3D array to hold the nodal input and output values
+        nodal_input  = np.zeros((3,3,3))
+        nodal_output = np.zeros((3,3,3))
+
+        # Populate the nodal input and output arrays
+        for index in range(atomic_features.shape[0]):
+            x = int(atomic_features[index, 1])
+            y = int(atomic_features[index, 2])
+            z = int(atomic_features[index, 3])
+
+            nodal_input[x,y,z]  = atomic_features[index, 0]
+            nodal_output[x,y,z] = atomic_features[index, 4]
+
+        # Now write the two 3D arrays to file
+        self.f.BeginStep()
+        self.f.Put(self.var_totalenergy, np.array([total_energy]))
+        self.f.Put(self.var_nodalinput,  nodal_input)
+        self.f.Put(self.var_nodaloutput, nodal_output)
+        self.f.EndStep()
+
+    def close(self):
+        self.f.Close()
+
+
+
+def write_to_file(total_energy, atomic_features, count_config, dirpath):
 
     numpy_string_total_value = np.array2string(total_energy)
 
     filetxt = numpy_string_total_value
 
-    for index in range(0, atomic_features.shape[0]):
+    for index in range(atomic_features.shape[0]):
         numpy_row = atomic_features[index, :]
         numpy_string_row = np.array2string(
             numpy_row, precision=2, separator="\t", suppress_small=True
         )
         filetxt += "\n" + numpy_string_row.lstrip("[").rstrip("]")
 
-        filename = os.path.join(dir, "output" + str(count_config) + ".txt")
-        with open(filename, "w") as f:
-            f.write(filetxt)
+        filename = os.path.join(dirpath, "output" + str(count_config) + ".txt")
+    
+    with open(filename, "w") as f:
+        f.write(filetxt)
 
 
 # 3D Ising model
@@ -74,10 +119,13 @@ def E_dimensionless(config, L, spin_function, scale_spin):
 
 
 def create_dataset(
-    L, histogram_cutoff, dir, spin_function=lambda x: x, scale_spin=False
+    L, histogram_cutoff, dirpath, spin_function=lambda x: x, scale_spin=False
 ):
 
     count_config = 0
+
+    # Initialize adios writer
+    adios_writer = AdiosWriter()
 
     for num_downs in tqdm(range(0, L ** 3)):
 
@@ -95,7 +143,8 @@ def create_dataset(
                     config, L, spin_function, scale_spin
                 )
 
-                write_to_file(total_energy, atomic_features, count_config, dir)
+                write_to_file(total_energy, atomic_features, count_config, dirpath)
+                adios_writer.write(total_energy, atomic_features, count_config, dirpath)
 
                 count_config = count_config + 1
 
@@ -109,20 +158,26 @@ def create_dataset(
                     config, L, spin_function, scale_spin
                 )
 
-                write_to_file(total_energy, atomic_features, count_config, dir)
+                write_to_file(total_energy, atomic_features, count_config, dirpath)
+                adios_writer.write(total_energy, atomic_features, count_config, dirpath)
 
                 count_config = count_config + 1
 
 
+    adios_writer.close()
+
+
+
 if __name__ == "__main__":
 
-    dir = os.path.join(os.path.dirname(__file__), "../../dataset/ising_model")
-    if os.path.exists(dir):
-        shutil.rmtree(dir)
-    os.makedirs(dir)
+    dirpath = os.path.join(os.path.dirname(__file__), "../../dataset/ising_model")
+    if os.path.exists(dirpath):
+        shutil.rmtree(dirpath)
+    os.makedirs(dirpath)
 
     number_atoms_per_dimension = 3
     configurational_histogram_cutoff = 1000
+    # configurational_histogram_cutoff = 2
 
     # Use sine function as non-linear extension of Ising model
     # Use randomized scaling of the spin magnitudes
@@ -130,7 +185,7 @@ if __name__ == "__main__":
     create_dataset(
         number_atoms_per_dimension,
         configurational_histogram_cutoff,
-        dir,
+        dirpath,
         spin_function=spin_func,
         scale_spin=True,
     )
