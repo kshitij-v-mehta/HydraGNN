@@ -10,7 +10,13 @@ from mpi4py import MPI
 import adios2
 
 
-class AdiosWriter:
+class AdiosWriter_1:
+    """
+    This implementation creates a BP file in which total_energy, nodal_input, and nodal_output
+    are variables. We write an adios step for each graph.
+    Pros: A compact structure that has low metadata overhead.
+    Cons: Cannot do data parallelism as it cannot write graphs (== adios steps) in parallel
+    """
     def __init__(self):
         self.adios = adios2.ADIOS(MPI.COMM_SELF)
         self.io = self.adios.DeclareIO("ioWriter")
@@ -22,7 +28,7 @@ class AdiosWriter:
         self.var_nodalinput  = self.io.DefineVariable("Nodal_input",  nodal_type,       [], [], [3,3,3], adios2.ConstantDims)
         self.var_nodaloutput = self.io.DefineVariable("Nodal_output", nodal_type,       [], [], [3,3,3], adios2.ConstantDims)
         
-        self.f = self.io.Open("ising_dataset.bp", adios2.Mode.Write, MPI.COMM_SELF)
+        self.f = self.io.Open("ising_dataset_1.bp", adios2.Mode.Write, MPI.COMM_SELF)
 
 
     def write(self, total_energy, atomic_features, count_config, dirpath):
@@ -40,6 +46,51 @@ class AdiosWriter:
             nodal_output[x,y,z] = atomic_features[index, 4]
 
         # Now write the two 3D arrays to file
+        self.f.BeginStep()
+        self.f.Put(self.var_totalenergy, np.array([total_energy]))
+        self.f.Put(self.var_nodalinput,  nodal_input)
+        self.f.Put(self.var_nodaloutput, nodal_output)
+        self.f.EndStep()
+
+    def close(self):
+        self.f.Close()
+
+
+class AdiosWriter_2:
+    """
+    This implementation creates a separate set of variables for every graph.
+    For example, if there are 20k graphs, the adios file will have 20k variables each for
+    the total energy, nodal input, and nodal output.
+    Pros: Allows data parallelism, as each rank can writes its own graph (== adios variables) 
+    separately.
+    Cons: This is not a compact format. The metadata overhead is higher.
+    """
+    def __init__(self):
+        self.adios = adios2.ADIOS(MPI.COMM_SELF)
+        self.io = self.adios.DeclareIO("ioWriter")
+        self.f = self.io.Open("ising_dataset_2.bp", adios2.Mode.Write, MPI.COMM_SELF)
+
+    def write(self, total_energy, atomic_features, count_config, dirpath):
+        totalenergy_type = np.array([0], dtype=np.float64)
+        nodal_type = np.array([3,3,3], dtype=np.float64)
+
+        self.var_totalenergy = self.io.DefineVariable("Total_energy_{}".format(count_config), totalenergy_type, [], [], [1],     adios2.ConstantDims)
+        self.var_nodalinput  = self.io.DefineVariable("Nodal_input_{}".format(count_config),  nodal_type,       [], [], [3,3,3], adios2.ConstantDims)
+        self.var_nodaloutput = self.io.DefineVariable("Nodal_output_{}".format(count_config), nodal_type,       [], [], [3,3,3], adios2.ConstantDims)
+
+        # 3D array to hold the nodal input and output values
+        nodal_input  = np.zeros((3,3,3))
+        nodal_output = np.zeros((3,3,3))
+
+        # Populate the nodal input and output arrays
+        for index in range(atomic_features.shape[0]):
+            x = int(atomic_features[index, 1])
+            y = int(atomic_features[index, 2])
+            z = int(atomic_features[index, 3])
+
+            nodal_input[x,y,z]  = atomic_features[index, 0]
+            nodal_output[x,y,z] = atomic_features[index, 4]
+        
         self.f.BeginStep()
         self.f.Put(self.var_totalenergy, np.array([total_energy]))
         self.f.Put(self.var_nodalinput,  nodal_input)
@@ -125,7 +176,7 @@ def create_dataset(
     count_config = 0
 
     # Initialize adios writer
-    adios_writer = AdiosWriter()
+    adios_writer = AdiosWriter_2()
 
     for num_downs in tqdm(range(0, L ** 3)):
 
@@ -143,6 +194,7 @@ def create_dataset(
                     config, L, spin_function, scale_spin
                 )
 
+                # Leave the original I/O on for now
                 write_to_file(total_energy, atomic_features, count_config, dirpath)
                 adios_writer.write(total_energy, atomic_features, count_config, dirpath)
 
@@ -158,6 +210,7 @@ def create_dataset(
                     config, L, spin_function, scale_spin
                 )
 
+                # Leave the original I/O on for now
                 write_to_file(total_energy, atomic_features, count_config, dirpath)
                 adios_writer.write(total_energy, atomic_features, count_config, dirpath)
 
@@ -177,7 +230,7 @@ if __name__ == "__main__":
 
     number_atoms_per_dimension = 3
     configurational_histogram_cutoff = 1000
-    # configurational_histogram_cutoff = 2
+    # configurational_histogram_cutoff = 10
 
     # Use sine function as non-linear extension of Ising model
     # Use randomized scaling of the spin magnitudes
