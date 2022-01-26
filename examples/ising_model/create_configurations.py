@@ -46,11 +46,11 @@ class AdiosWriter_1:
             nodal_output[x,y,z] = atomic_features[index, 4]
 
         # Now write the two 3D arrays to file
-        self.f.BeginStep()
+        # self.f.BeginStep()
         self.f.Put(self.var_totalenergy, np.array([total_energy]))
         self.f.Put(self.var_nodalinput,  nodal_input)
         self.f.Put(self.var_nodaloutput, nodal_output)
-        self.f.EndStep()
+        # self.f.EndStep()
 
     def close(self):
         self.f.Close()
@@ -91,11 +91,11 @@ class AdiosWriter_2:
             nodal_input[x,y,z]  = atomic_features[index, 0]
             nodal_output[x,y,z] = atomic_features[index, 4]
         
-        self.f.BeginStep()
+        # self.f.BeginStep()
         self.f.Put(self.var_totalenergy, np.array([total_energy]))
         self.f.Put(self.var_nodalinput,  nodal_input)
         self.f.Put(self.var_nodaloutput, nodal_output)
-        self.f.EndStep()
+        # self.f.EndStep()
 
     def close(self):
         self.f.Close()
@@ -176,7 +176,7 @@ def create_dataset(
     count_config = 0
 
     # Initialize adios writer
-    adios_writer = AdiosWriter_2()
+    adios_writer = AdiosWriter_1()
 
     for num_downs in tqdm(range(0, L ** 3)):
 
@@ -229,8 +229,8 @@ if __name__ == "__main__":
     os.makedirs(dirpath)
 
     number_atoms_per_dimension = 3
-    configurational_histogram_cutoff = 1000
-    # configurational_histogram_cutoff = 10
+    # configurational_histogram_cutoff = 1000
+    configurational_histogram_cutoff = 10
 
     # Use sine function as non-linear extension of Ising model
     # Use randomized scaling of the spin magnitudes
