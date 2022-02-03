@@ -72,15 +72,13 @@ class AdiosWriter_2:
 
     def write(self, total_energy, atomic_features, count_config, dirpath):
         totalenergy_type = np.array([0], dtype=np.float64)
-        nodal_type = np.array([3,3,3], dtype=np.float64)
+        nodal_type = np.array([3,3,3,2], dtype=np.float64)
 
-        self.var_totalenergy = self.io.DefineVariable("Total_energy_{}".format(count_config), totalenergy_type, [], [], [1],     adios2.ConstantDims)
-        self.var_nodalinput  = self.io.DefineVariable("Nodal_input_{}".format(count_config),  nodal_type,       [], [], [3,3,3], adios2.ConstantDims)
-        self.var_nodaloutput = self.io.DefineVariable("Nodal_output_{}".format(count_config), nodal_type,       [], [], [3,3,3], adios2.ConstantDims)
+        self.var_totalenergy = self.io.DefineVariable("Total_energy_{}".format(count_config), totalenergy_type, [], [], [1],       adios2.ConstantDims)
+        self.var_nodalparams = self.io.DefineVariable("Nodal_params_{}".format(count_config), nodal_type,       [], [], [3,3,3,2], adios2.ConstantDims)
 
         # 3D array to hold the nodal input and output values
-        nodal_input  = np.zeros((3,3,3))
-        nodal_output = np.zeros((3,3,3))
+        nodal_params = np.zeros((3,3,3,2))
 
         # Populate the nodal input and output arrays
         for index in range(atomic_features.shape[0]):
@@ -88,13 +86,12 @@ class AdiosWriter_2:
             y = int(atomic_features[index, 2])
             z = int(atomic_features[index, 3])
 
-            nodal_input[x,y,z]  = atomic_features[index, 0]
-            nodal_output[x,y,z] = atomic_features[index, 4]
+            nodal_params[x,y,z,0] = atomic_features[index, 0]  # nodal input
+            nodal_params[x,y,z,1] = atomic_features[index, 1]  # nodal output
         
         # self.f.BeginStep()
         self.f.Put(self.var_totalenergy, np.array([total_energy]))
-        self.f.Put(self.var_nodalinput,  nodal_input)
-        self.f.Put(self.var_nodaloutput, nodal_output)
+        self.f.Put(self.var_nodalparams, nodal_params)
         # self.f.EndStep()
 
     def close(self):
@@ -176,7 +173,7 @@ def create_dataset(
     count_config = 0
 
     # Initialize adios writer
-    adios_writer = AdiosWriter_1()
+    adios_writer = AdiosWriter_2()
 
     for num_downs in tqdm(range(0, L ** 3)):
 
