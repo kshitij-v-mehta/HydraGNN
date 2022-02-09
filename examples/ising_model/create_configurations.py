@@ -91,12 +91,14 @@ class AdiosWriter_2:
             z = int(atomic_features[index, 3])
 
             nodal_params[x,y,z,0] = atomic_features[index, 0]  # nodal input
-            nodal_params[x,y,z,1] = atomic_features[index, 1]  # nodal output
+            nodal_params[x,y,z,1] = atomic_features[index, 4]  # nodal output
         
         # self.f.BeginStep()
-        self.f.Put(self.var_totalenergy, np.array([total_energy]))
+        total_energy_nparr = np.array([total_energy])
+        self.f.Put(self.var_totalenergy, total_energy_nparr)
         self.f.Put(self.var_nodalparams, nodal_params)
         # self.f.EndStep()
+        print(total_energy_nparr)
 
     def close(self):
         self.f.Close()
@@ -232,7 +234,7 @@ if __name__ == "__main__":
 
     number_atoms_per_dimension = 3
     # configurational_histogram_cutoff = 1000
-    configurational_histogram_cutoff = 10
+    configurational_histogram_cutoff = 1
 
     # Use sine function as non-linear extension of Ising model
     # Use randomized scaling of the spin magnitudes
