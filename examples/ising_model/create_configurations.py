@@ -99,7 +99,6 @@ class AdiosWriter_2:
         self.f.Put(self.var_nodalparams, nodal_params)
         self.f.PerformPuts()
         # self.f.EndStep()
-        print(total_energy_nparr)
 
     def close(self):
         self.f.Close()
@@ -235,7 +234,6 @@ if __name__ == "__main__":
 
     number_atoms_per_dimension = 3
     configurational_histogram_cutoff = 1000
-    # configurational_histogram_cutoff = 1
 
     # Use sine function as non-linear extension of Ising model
     # Use randomized scaling of the spin magnitudes
