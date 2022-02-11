@@ -13,12 +13,21 @@ import os
 import numpy as np
 import pickle
 import pathlib
+import adios2
 
 import torch
 from torch_geometric.data import Data
 from torch import tensor
 
 # WARNING: DO NOT use collective communication calls here because only rank 0 uses this routines
+
+import re
+
+
+def natural_sort(l):
+    convert = lambda text: int(text) if text.isdigit() else text.lower()
+    alphanum_key = lambda key: [convert(c) for c in re.split("([0-9]+)", key)]
+    return sorted(l, key=alphanum_key)
 
 
 def tensor_divide(x1, x2):
@@ -86,20 +95,40 @@ class RawDataLoader:
                 len(os.listdir(raw_data_path)) > 0
             ), "No data files provided in {}!".format(raw_data_path)
 
-            for filename in os.listdir(raw_data_path):
-                if filename == ".DS_Store":
-                    continue
-                f = open(os.path.join(raw_data_path, filename), "r", encoding="utf-8")
-                all_lines = f.readlines()
-                data_object = self.__transform_input_to_data_object_base(
-                    lines=all_lines
-                )
-                dataset.append(data_object)
-                f.close()
+            adios_filename = "%s/../ising_dataset_2.bp" % raw_data_path
+            if os.path.exists(adios_filename):
+                adios_filename = os.path.abspath(adios_filename)
+                print("Read Adios file: ", adios_filename)
+                with adios2.open(adios_filename, "r") as f:
+                    num_config = f.read("num_config")[0]
+                    for i in range(num_config):
+                        data_object = (
+                            self.__transform_adios_variable_to_data_object_base(f, i)
+                        )
+                        dataset.append(data_object)
 
-            if self.data_format == "LSMS":
-                for idx, data_object in enumerate(dataset):
-                    dataset[idx] = self.__charge_density_update_for_LSMS(data_object)
+                if self.data_format == "LSMS":
+                    assert (False, "Not implemented yet")
+
+            else:
+                for filename in natural_sort(os.listdir(raw_data_path)):
+                    if filename == ".DS_Store":
+                        continue
+                    f = open(
+                        os.path.join(raw_data_path, filename), "r", encoding="utf-8"
+                    )
+                    all_lines = f.readlines()
+                    data_object = self.__transform_input_to_data_object_base(
+                        lines=all_lines
+                    )
+                    dataset.append(data_object)
+                    f.close()
+
+                if self.data_format == "LSMS":
+                    for idx, data_object in enumerate(dataset):
+                        dataset[idx] = self.__charge_density_update_for_LSMS(
+                            data_object
+                        )
 
             # scaled features by number of nodes
             dataset = self.__scale_features_by_num_nodes(dataset)
@@ -152,9 +181,9 @@ class RawDataLoader:
         for line in lines[1:]:
             node_feat = line.split(None, 11)
 
-            x_pos = float(node_feat[2].strip())
-            y_pos = float(node_feat[3].strip())
-            z_pos = float(node_feat[4].strip())
+            x_pos = float(node_feat[1].strip())
+            y_pos = float(node_feat[2].strip())
+            z_pos = float(node_feat[3].strip())
             node_position_matrix.append([x_pos, y_pos, z_pos])
 
             node_feature = []
@@ -258,3 +287,28 @@ class RawDataLoader:
                             - self.minmax_node_feature[0, ifeat]
                         ),
                     )
+
+    def __transform_adios_variable_to_data_object_base(self, f, index: int):
+        """
+        Transform Adios variable to pytorgh geometric data object
+        """
+        data_object = Data()
+
+        g_feature = f.read("Total_energy_%d" % index).astype(np.float32)
+        nodal_params = f.read("Nodal_params_%d" % index).astype(np.float32)
+        # nodal_position = f.read('Nodal_position_%d'%index).astype(np.float32)
+        # d0, d1, d2, d3 = nodal_position.shape
+        # assert (d3 == 3)
+
+        nodal_feature = np.vstack(
+            (nodal_params[..., 0].ravel(), nodal_params[..., 1].ravel())
+        ).T
+        # nodal_position = np.reshape(nodal_position, (d0*d1*d2, d3))
+        index_list = [x.ravel() for x in np.indices(nodal_params.shape[:-1])]
+        nodal_position = np.array([pos for pos in zip(*index_list)], dtype=np.float32)
+
+        data_object.y = tensor(g_feature)
+        data_object.x = tensor(nodal_feature)
+        data_object.pos = tensor(nodal_position)
+
+        return data_object
