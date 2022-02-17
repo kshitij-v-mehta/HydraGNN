@@ -78,11 +78,14 @@ class AdiosWriter_2:
         totalenergy_type = np.array([0], dtype=np.float64)
         nodal_type = np.array([3,3,3,2], dtype=np.float64)
 
-        self.var_totalenergy = self.io.DefineVariable("Total_energy_{}".format(count_config), totalenergy_type, [], [], [1],       adios2.ConstantDims)
-        self.var_nodalparams = self.io.DefineVariable("Nodal_params_{}".format(count_config), nodal_type,       [], [], [3,3,3,2], adios2.ConstantDims)
+        self.var_totalenergy   = self.io.DefineVariable("Total_energy_{}".format(count_config),   totalenergy_type, [], [], [1],       adios2.ConstantDims)
+        self.var_nodalparams   = self.io.DefineVariable("Nodal_params_{}".format(count_config),   nodal_type,       [], [], [3,3,3,2], adios2.ConstantDims)
+        self.var_nodalposition = self.io.DefineVariable("Nodal_position_{}".format(count_config), nodal_type,       [], [], [3,3,3,3], adios2.ConstantDims)
+
 
         # 3D array to hold the nodal input and output values
-        nodal_params = np.zeros((3,3,3,2))
+        nodal_params   = np.zeros((3,3,3,2))
+        nodal_position = np.zeros((3,3,3,3))
 
         # Populate the nodal input and output arrays
         for index in range(atomic_features.shape[0]):
@@ -92,11 +95,13 @@ class AdiosWriter_2:
 
             nodal_params[x,y,z,0] = atomic_features[index, 0]  # nodal input
             nodal_params[x,y,z,1] = atomic_features[index, 4]  # nodal output
+            nodal_position[x,y,z] = (x,y,z)
         
         # self.f.BeginStep()
         total_energy_nparr = np.array([total_energy])
-        self.f.Put(self.var_totalenergy, total_energy_nparr)
-        self.f.Put(self.var_nodalparams, nodal_params)
+        self.f.Put(self.var_totalenergy,   total_energy_nparr)
+        self.f.Put(self.var_nodalparams,   nodal_params)
+        self.f.Put(self.var_nodalposition, nodal_position)
         self.f.PerformPuts()
         # self.f.EndStep()
 
