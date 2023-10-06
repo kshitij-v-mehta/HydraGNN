@@ -172,7 +172,6 @@ class DFTBDataset(AbstractBaseDataset):
         except IOError:
             print(f"'{pdb_filename}'" + " not found")
             return None
-            #sys.exit(1)
 
         try:
             spectrum_filename = raw_data_path + '/' + dir + '/' + 'EXC-smooth.DAT'
@@ -217,7 +216,7 @@ class DFTBDataset(AbstractBaseDataset):
                            dim=0).t().contiguous()
 
         data_object = generate_graphdata_from_rdkit_molecule(mol, torch.tensor(spectrum_energies), dftb_node_types, atomicdescriptors_torch_tensor)
-        atoms = io.read(raw_data_path + '/' + dir + '/' + 'geo_end.xyz')
+        atoms = io.read(raw_data_path + '/' + dir + '/' + 'geo_end.xyz', parallel=False)
         data_object.pos = torch.from_numpy(atoms.positions)
         try:
             data_object = spherical_coordinates(data_object)
@@ -230,9 +229,6 @@ class DFTBDataset(AbstractBaseDataset):
         data_object.x = data_object.x.to(torch.float32)
         data_object.edge_attr = data_object.edge_attr.to(torch.float32)
         data_object.ID = dir.replace('mol_', '')
-
-        #except:
-        #    print(f"Graph sample not created for {dir}")
 
         return data_object
     
