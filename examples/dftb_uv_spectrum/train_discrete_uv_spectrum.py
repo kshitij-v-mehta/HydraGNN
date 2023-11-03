@@ -165,6 +165,10 @@ if __name__ == "__main__":
     parser.add_argument("--log", help="log name")
     parser.add_argument("--batch_size", type=int, help="batch_size", default=None)
     parser.add_argument("--everyone", action="store_true", help="gptimer")
+    parser.add_argument("--input_data", default=None,
+                        help="Input dataset to read in. Must be either a .txt file listing molecule directories or a "
+                             "directory containing .tar.gz files. Provide --tmpfs to extract tar files into fast, "
+                             "local storage.")
     parser.add_argument("--tmpfs", default=None,
                         help="Transient storage space such as /tmp/$USER which can be used as a temporary "
                              "scratch space for caching and/or extracting data. "
@@ -191,7 +195,7 @@ if __name__ == "__main__":
     graph_feature_names = ["frequencies", "intensities"]
     graph_feature_dim = [50, 50]
     dirpwd = os.path.dirname(os.path.abspath(__file__))
-    datafile = os.path.join(dirpwd, "dataset/dftb_aisd_electronic_excitation_spectrum")
+    datafile = args.input_data
     ##################################################################################################################
     input_filename = os.path.join(dirpwd, "dftb_discrete_uv_spectrum.json")
     ##################################################################################################################
@@ -236,7 +240,7 @@ if __name__ == "__main__":
     if args.preonly:
         ## local data
         total = DFTBDataset(
-            os.path.join(datafile, "mollist.txt"),
+            datafile,
             dftb_node_types,
             var_config,
             dist=True,
