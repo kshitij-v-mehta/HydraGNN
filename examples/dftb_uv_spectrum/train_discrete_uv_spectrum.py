@@ -70,9 +70,7 @@ def dftb_to_graph(moldir, dftb_node_types, var_config):
         spectrum_filename, skiprows=4, usecols=(0, 1), dtype=np.float32
     )
     ytarget = torch.tensor(ytarget.T.ravel())
-    data = generate_graphdata_from_rdkit_molecule(
-        mol, ytarget, dftb_node_types, var_config
-    )
+    data = generate_graphdata_from_rdkit_molecule(mol, ytarget, dftb_node_types, var_config=var_config)
     data.ID = torch.tensor((int(os.path.basename(moldir).replace("mol_", "")),))
     return data
 
