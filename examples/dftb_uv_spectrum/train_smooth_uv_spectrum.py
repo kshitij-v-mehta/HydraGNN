@@ -163,7 +163,7 @@ class DFTBDataset(AbstractBaseDataset):
 
             # else if items in dirlist are molecule directories, parse them and create graph objects
             else:
-                data_object = self.transform_input_to_data_object_base(dirpath, mdir)
+                data_object = self.transform_input_to_data_object_base(dirpath, fullpath)
                 if data_object is not None:
                     self.dataset.append(data_object)
                     
