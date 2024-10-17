@@ -14,9 +14,14 @@ from torch.nn import ModuleList, Sequential, ReLU, Linear, Module
 import torch.nn.functional as F
 from torch_geometric.nn import global_mean_pool, BatchNorm
 from torch.nn import GaussianNLLLoss
-from hydragnn.utils.model import loss_function_selection
+from torch.utils.checkpoint import checkpoint
+import torch_scatter
+from hydragnn.utils.model import activation_function_selection, loss_function_selection
 import sys
 from hydragnn.utils.distributed import get_device
+from hydragnn.utils.print.print_utils import print_master
+
+import inspect
 
 
 class Base(Module):
@@ -27,7 +32,9 @@ class Base(Module):
         output_dim: list,
         output_type: list,
         config_heads: dict,
+        activation_function_type: str,
         loss_function_type: str,
+        equivariance: bool,
         ilossweights_hyperp: int = 1,  # if =1, considering weighted losses for different tasks and treat the weights as hyper parameters
         loss_weights: list = [1.0, 1.0, 1.0],  # weights for losses of different tasks
         ilossweights_nll: int = 0,  # if =1, using the scalar uncertainty as weights, as in paper# https://openaccess.thecvf.com/content_cvpr_2018/papers/Kendall_Multi-Task_Learning_Using_CVPR_2018_paper.pdf
@@ -58,6 +65,16 @@ class Base(Module):
         self.batch_norms_node_hidden = ModuleList()
         self.convs_node_output = ModuleList()
         self.batch_norms_node_output = ModuleList()
+        self.equivariance = equivariance
+        self.activation_function = activation_function_selection(
+            activation_function_type
+        )
+
+        # output variance for Gaussian negative log likelihood loss
+        self.var_output = 0
+        if loss_function_type == "GaussianNLLLoss":
+            self.var_output = 1
+        self.loss_function_type = loss_function_type
 
         self.loss_function = loss_function_selection(loss_function_type)
         self.ilossweights_nll = ilossweights_nll
@@ -100,6 +117,8 @@ class Base(Module):
         if self.initial_bias is not None:
             self._set_bias()
 
+        self.conv_checkpointing = False
+
     def _init_conv(self):
         self.graph_convs.append(self.get_conv(self.input_dim, self.hidden_dim))
         self.feature_layers.append(BatchNorm(self.hidden_dim))
@@ -109,8 +128,11 @@ class Base(Module):
             self.feature_layers.append(BatchNorm(self.hidden_dim))
 
     def _conv_args(self, data):
-        conv_args = {"edge_index": data.edge_index}
-        if (data.edge_attr is not None) and (self.use_edge_attr):
+        conv_args = {"edge_index": data.edge_index.to(torch.long)}
+        if self.use_edge_attr:
+            assert (
+                data.edge_attr is not None
+            ), "Data must have edge attributes if use_edge_attributes is set."
             conv_args.update({"edge_attr": data.edge_attr})
         return conv_args
 
@@ -143,24 +165,56 @@ class Base(Module):
         if len(node_feature_ind) == 0:
             return
         # In this part, each head has same number of convolutional layers, but can have different output dimension
-        self.convs_node_hidden.append(
-            self.get_conv(self.hidden_dim, self.hidden_dim_node[0])
-        )
-        self.batch_norms_node_hidden.append(BatchNorm(self.hidden_dim_node[0]))
-        for ilayer in range(self.num_conv_layers_node - 1):
+        if "last_layer" in inspect.signature(self.get_conv).parameters:
             self.convs_node_hidden.append(
                 self.get_conv(
-                    self.hidden_dim_node[ilayer], self.hidden_dim_node[ilayer + 1]
+                    self.hidden_dim, self.hidden_dim_node[0], last_layer=False
                 )
             )
+        else:
+            self.convs_node_hidden.append(
+                self.get_conv(self.hidden_dim, self.hidden_dim_node[0])
+            )
+        self.batch_norms_node_hidden.append(BatchNorm(self.hidden_dim_node[0]))
+        for ilayer in range(self.num_conv_layers_node - 1):
+            # This check is needed because the "get_conv" method of SCFStack takes one additional argument called last_layer
+            if "last_layer" in inspect.signature(self.get_conv).parameters:
+                self.convs_node_hidden.append(
+                    self.get_conv(
+                        self.hidden_dim_node[ilayer],
+                        self.hidden_dim_node[ilayer + 1],
+                        last_layer=False,
+                    )
+                )
+            else:
+                self.convs_node_hidden.append(
+                    self.get_conv(
+                        self.hidden_dim_node[ilayer], self.hidden_dim_node[ilayer + 1]
+                    )
+                )
             self.batch_norms_node_hidden.append(
                 BatchNorm(self.hidden_dim_node[ilayer + 1])
             )
         for ihead in node_feature_ind:
-            self.convs_node_output.append(
-                self.get_conv(self.hidden_dim_node[-1], self.head_dims[ihead])
+            # This check is needed because the "get_conv" method of SCFStack takes one additional argument called last_layer
+            if "last_layer" in inspect.signature(self.get_conv).parameters:
+                self.convs_node_output.append(
+                    self.get_conv(
+                        self.hidden_dim_node[-1],
+                        self.head_dims[ihead] * (1 + self.var_output),
+                        last_layer=True,
+                    )
+                )
+            else:
+                self.convs_node_output.append(
+                    self.get_conv(
+                        self.hidden_dim_node[-1],
+                        self.head_dims[ihead] * (1 + self.var_output),
+                    )
+                )
+            self.batch_norms_node_output.append(
+                BatchNorm(self.head_dims[ihead] * (1 + self.var_output))
             )
-            self.batch_norms_node_output.append(BatchNorm(self.head_dims[ihead]))
 
     def _multihead(self):
         ############multiple heads/taks################
@@ -170,10 +224,10 @@ class Base(Module):
             denselayers = []
             dim_sharedlayers = self.config_heads["graph"]["dim_sharedlayers"]
             denselayers.append(Linear(self.hidden_dim, dim_sharedlayers))
-            denselayers.append(ReLU())
+            denselayers.append(self.activation_function)
             for ishare in range(self.config_heads["graph"]["num_sharedlayers"] - 1):
                 denselayers.append(Linear(dim_sharedlayers, dim_sharedlayers))
-                denselayers.append(ReLU())
+                denselayers.append(self.activation_function)
             self.graph_shared = Sequential(*denselayers)
 
         if "node" in self.config_heads:
@@ -189,16 +243,16 @@ class Base(Module):
                 dim_head_hidden = self.config_heads["graph"]["dim_headlayers"]
                 denselayers = []
                 denselayers.append(Linear(dim_sharedlayers, dim_head_hidden[0]))
-                denselayers.append(ReLU())
+                denselayers.append(self.activation_function)
                 for ilayer in range(num_head_hidden - 1):
                     denselayers.append(
                         Linear(dim_head_hidden[ilayer], dim_head_hidden[ilayer + 1])
                     )
-                    denselayers.append(ReLU())
+                    denselayers.append(self.activation_function)
                 denselayers.append(
                     Linear(
                         dim_head_hidden[-1],
-                        self.head_dims[ihead] + self.ilossweights_nll * 1,
+                        self.head_dims[ihead] * (1 + self.var_output),
                     )
                 )
                 head_NN = Sequential(*denselayers)
@@ -210,13 +264,14 @@ class Base(Module):
                     assert (
                         self.num_nodes is not None
                     ), "num_nodes must be positive integer for MLP"
-                    # """if different graphs in the dataset have different size, one MLP is shared across all nodes """
+                    # """if different graphs in the datasets have different size, one MLP is shared across all nodes """
                     head_NN = MLPNode(
                         self.hidden_dim,
-                        self.head_dims[ihead],
+                        self.head_dims[ihead] * (1 + self.var_output),
                         self.num_mlp,
                         self.hidden_dim_node,
                         self.config_heads["node"]["type"],
+                        self.activation_function,
                     )
                 elif self.node_NN_type == "conv":
                     for conv, batch_norm in zip(
@@ -241,14 +296,24 @@ class Base(Module):
                 )
             self.heads_NN.append(head_NN)
 
+    def enable_conv_checkpointing(self):
+        print_master("Enabling checkpointing")
+        self.conv_checkpointing = True
+
     def forward(self, data):
         x = data.x
+        pos = data.pos
 
         ### encoder part ####
         conv_args = self._conv_args(data)
         for conv, feat_layer in zip(self.graph_convs, self.feature_layers):
-            c = conv(x=x, **conv_args)
-            x = F.relu(feat_layer(c))
+            if not self.conv_checkpointing:
+                c, pos = conv(x=x, pos=pos, **conv_args)
+            else:
+                c, pos = checkpoint(
+                    conv, use_reentrant=False, x=x, pos=pos, **conv_args
+                )
+            x = self.activation_function(feat_layer(c))
 
         #### multi-head decoder part####
         # shared dense layers for graph level output
@@ -257,30 +322,95 @@ class Base(Module):
         else:
             x_graph = global_mean_pool(x, data.batch.to(x.device))
         outputs = []
+        outputs_var = []
         for head_dim, headloc, type_head in zip(
             self.head_dims, self.heads_NN, self.head_type
         ):
             if type_head == "graph":
                 x_graph_head = self.graph_shared(x_graph)
-                outputs.append(headloc(x_graph_head))
+                output_head = headloc(x_graph_head)
+                outputs.append(output_head[:, :head_dim])
+                outputs_var.append(output_head[:, head_dim:] ** 2)
             else:
                 if self.node_NN_type == "conv":
                     for conv, batch_norm in zip(headloc[0::2], headloc[1::2]):
-                        x_node = F.relu(
-                            batch_norm(conv(x=x, edge_index=data.edge_index))
-                        )
+                        c, pos = conv(x=x, pos=pos, **conv_args)
+                        c = batch_norm(c)
+                        x = self.activation_function(c)
+                    x_node = x
                 else:
                     x_node = headloc(x=x, batch=data.batch)
-                outputs.append(x_node)
+                outputs.append(x_node[:, :head_dim])
+                outputs_var.append(x_node[:, head_dim:] ** 2)
+        if self.var_output:
+            return outputs, outputs_var
         return outputs
 
     def loss(self, pred, value, head_index):
+        var = None
+        if self.var_output:
+            var = pred[1]
+            pred = pred[0]
         if self.ilossweights_nll == 1:
-            return self.loss_nll(pred, value, head_index)
+            return self.loss_nll(pred, value, head_index, var=var)
         elif self.ilossweights_hyperp == 1:
-            return self.loss_hpweighted(pred, value, head_index)
+            return self.loss_hpweighted(pred, value, head_index, var=var)
 
-    def loss_nll(self, pred, value, head_index):
+    def energy_force_loss(self, pred, data):
+        # Asserts
+        assert (
+            data.pos is not None and data.energy is not None and data.forces is not None
+        ), "data.pos, data.energy, data.forces must be provided for energy-force loss. Check your dataset creation and naming."
+        assert (
+            data.pos.requires_grad
+        ), "data.pos does not have grad, so force predictions cannot be computed. Check that data.pos has grad set to true before prediction."
+        assert (
+            self.num_heads == 1 and self.head_type[0] == "node"
+        ), "Force predictions are only supported for models with one head that predict nodal energy. Check your num_heads and head_types."
+        # Initialize loss
+        tot_loss = 0
+        tasks_loss = []
+        # Energies
+        node_energy_pred = pred[0]
+        graph_energy_pred = torch_scatter.scatter_add(
+            node_energy_pred, data.batch, dim=0
+        ).float()
+        graph_energy_true = data.energy
+        energy_loss_weight = self.loss_weights[
+            0
+        ]  # There should only be one loss-weight for energy
+        tot_loss += (
+            self.loss_function(graph_energy_pred, graph_energy_true)
+            * energy_loss_weight
+        )
+        tasks_loss.append(self.loss_function(graph_energy_pred, graph_energy_true))
+        # Forces
+        forces_true = data.forces.float()
+        forces_pred = torch.autograd.grad(
+            graph_energy_pred,
+            data.pos,
+            grad_outputs=torch.ones_like(graph_energy_pred),
+            retain_graph=graph_energy_pred.requires_grad,  # Retain graph only if needed (it will be needed during training, but not during validation/testing)
+            create_graph=True,
+        )[0].float()
+        assert (
+            forces_pred is not None
+        ), "No gradients were found for data.pos. Does your model use positions for prediction?"
+        forces_pred = -forces_pred
+        force_loss_weight = (
+            energy_loss_weight
+            * torch.mean(torch.abs(graph_energy_true))
+            / (torch.mean(torch.abs(forces_true)) + 1e-8)
+        )  # Weight force loss and graph energy equally
+        tot_loss += (
+            self.loss_function(forces_pred, forces_true) * force_loss_weight
+        )  # Have force-weight be the complement to energy-weight
+        ## FixMe: current loss functions require the number of heads to be the number of things being predicted
+        ##        so, we need to do loss calculation manually without calling the other functions.
+
+        return tot_loss, tasks_loss
+
+    def loss_nll(self, pred, value, head_index, var=None):
         # negative log likelihood loss
         # uncertainty to weigh losses in https://openaccess.thecvf.com/content_cvpr_2018/papers/Kendall_Multi-Task_Learning_Using_CVPR_2018_paper.pdf
         # fixme: Pei said that right now this is never used
@@ -301,7 +431,7 @@ class Base(Module):
 
         return nll_loss, tasks_mseloss, []
 
-    def loss_hpweighted(self, pred, value, head_index):
+    def loss_hpweighted(self, pred, value, head_index, var=None):
         # weights for different tasks as hyper-parameters
         tot_loss = 0
         tasks_loss = []
@@ -312,11 +442,21 @@ class Base(Module):
             value_shape = head_val.shape
             if pred_shape != value_shape:
                 head_val = torch.reshape(head_val, pred_shape)
-
-            tot_loss += (
-                self.loss_function(head_pre, head_val) * self.loss_weights[ihead]
-            )
-            tasks_loss.append(self.loss_function(head_pre, head_val))
+            if var is None:
+                assert (
+                    self.loss_function_type != "GaussianNLLLoss"
+                ), "Expecting var for GaussianNLLLoss, but got None"
+                tot_loss += (
+                    self.loss_function(head_pre, head_val) * self.loss_weights[ihead]
+                )
+                tasks_loss.append(self.loss_function(head_pre, head_val))
+            else:
+                head_var = var[ihead]
+                tot_loss += (
+                    self.loss_function(head_pre, head_val, head_var)
+                    * self.loss_weights[ihead]
+                )
+                tasks_loss.append(self.loss_function(head_pre, head_val, head_var))
 
         return tot_loss, tasks_loss
 
@@ -325,23 +465,32 @@ class Base(Module):
 
 
 class MLPNode(Module):
-    def __init__(self, input_dim, output_dim, num_mlp, hidden_dim_node, node_type):
+    def __init__(
+        self,
+        input_dim,
+        output_dim,
+        num_mlp,
+        hidden_dim_node,
+        node_type,
+        activation_function,
+    ):
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.node_type = node_type
         self.num_mlp = num_mlp
+        self.activation_function = activation_function
 
         self.mlp = ModuleList()
         for _ in range(self.num_mlp):
             denselayers = []
             denselayers.append(Linear(self.input_dim, hidden_dim_node[0]))
-            denselayers.append(ReLU())
+            denselayers.append(self.activation_function)
             for ilayer in range(len(hidden_dim_node) - 1):
                 denselayers.append(
                     Linear(hidden_dim_node[ilayer], hidden_dim_node[ilayer + 1])
                 )
-                denselayers.append(ReLU())
+                denselayers.append(self.activation_function)
             denselayers.append(Linear(hidden_dim_node[-1], output_dim))
             self.mlp.append(Sequential(*denselayers))
 

@@ -6,15 +6,11 @@ mpi4py.rc.threads = False
 
 import os, json
 import random
-import pickle
 
 import logging
 import sys
-from tqdm import tqdm
 from mpi4py import MPI
-from itertools import chain
 import argparse
-import time
 
 from torch_geometric.transforms import Spherical
 
@@ -25,21 +21,23 @@ from ase import io
 from rdkit.Chem.rdmolfiles import MolFromPDBFile
 
 import hydragnn
-from hydragnn.utils.print_utils import print_distributed, iterate_tqdm, log
-from hydragnn.utils.time_utils import Timer
+from hydragnn.utils.print.print_utils import print_distributed, iterate_tqdm, log
+from hydragnn.utils.profiling_and_tracing.time_utils import Timer
 
 # from hydragnn.utils.adiosdataset import AdiosWriter, AdiosDataset
-from hydragnn.utils.pickledataset import SimplePickleDataset
-from hydragnn.utils.smiles_utils import (
+from hydragnn.utils.descriptors_and_embeddings.smiles_utils import (
     get_node_attribute_name,
     generate_graphdata_from_rdkit_molecule,
 )
 from hydragnn.utils.distributed import get_device
 from hydragnn.preprocess.load_data import split_dataset
-from hydragnn.utils.distdataset import DistDataset
-from hydragnn.utils.pickledataset import SimplePickleWriter, SimplePickleDataset
-from hydragnn.preprocess.utils import gather_deg
 from hydragnn.utils.tar_utils import extract_tar_file, get_mol_dir_list
+from hydragnn.utils.datasets.distdataset import DistDataset
+from hydragnn.utils.datasets.pickledataset import (
+    SimplePickleWriter,
+    SimplePickleDataset,
+)
+from hydragnn.preprocess.graph_samples_checks_and_updates import gather_deg
 
 import numpy as np
 
@@ -48,12 +46,11 @@ try:
 except ImportError:
     pass
 
-import torch_geometric.data
 import torch
 import torch.distributed as dist
 
-from hydragnn.utils import nsplit
-import hydragnn.utils.tracer as tr
+from hydragnn.utils.distributed import nsplit
+import hydragnn.utils.profiling_and_tracing.tracer as tr
 
 # FIXME: this works fine for now because we train on GDB-9 molecules
 # for larger chemical spaces, the following atom representation has to be properly expanded
@@ -64,7 +61,7 @@ def info(*args, logtype="info", sep=" "):
     getattr(logging, logtype)(sep.join(map(str, args)))
 
 
-from hydragnn.utils.abstractbasedataset import AbstractBaseDataset
+from hydragnn.utils.datasets.abstractbasedataset import AbstractBaseDataset
 
 spherical_coordinates = Spherical(norm=False, cat=True)
 
