@@ -1,4 +1,4 @@
-import os, json
+import os, json, pdb
 import logging
 import sys
 from mpi4py import MPI
@@ -61,7 +61,7 @@ def check_node_feature_dim(var_config):
         raise ValueError("Your node feature dim at the output index is not equal to 1.")
 
 
-if __name__ == "__main__":
+def main(batch_size, in_num_samples, adios_trainset, adios_valset, adios_testset):
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
@@ -150,8 +150,8 @@ if __name__ == "__main__":
     var_config["node_feature_dims"] = node_feature_dims
     check_node_feature_dim(var_config)
 
-    if args.batch_size is not None:
-        config["NeuralNetwork"]["Training"]["batch_size"] = args.batch_size
+    if batch_size is not None:
+        config["NeuralNetwork"]["Training"]["batch_size"] = batch_size
 
     if args.num_epoch is not None:
         config["NeuralNetwork"]["Training"]["num_epoch"] = args.num_epoch
@@ -170,7 +170,9 @@ if __name__ == "__main__":
         datefmt="%H:%M:%S",
     )
 
-    log_name = "GFM" if args.log is None else args.log
+    ebs = batch_size * MPI.COMM_WORLD.Get_size()
+    _log_name = "GFM" if args.log is None else args.log
+    log_name = f"{_log_name}_n{MPI.COMM_WORLD.Get_size()}_EBS{ebs}_LBS{batch_size}_NS{in_num_samples}"
     hydragnn.utils.print.setup_log(log_name)
     writer = hydragnn.utils.model.get_summary_writer(log_name)
 
@@ -316,31 +318,37 @@ if __name__ == "__main__":
         # fname = os.path.join(os.path.dirname(__file__), "./dataset/%s.bp" % mymodel)
         fname = mymodel
         print("mymodel:", rank, mycolor, mymodel)
-        trainset = AdiosDataset(
-            fname,
-            "trainset",
-            local_comm,
-            var_config=var_config,
-            keys=common_variable_names,
-        )
-        valset = AdiosDataset(
-            fname,
-            "valset",
-            local_comm,
-            var_config=var_config,
-            keys=common_variable_names,
-        )
-        testset = AdiosDataset(
-            fname,
-            "testset",
-            local_comm,
-            var_config=var_config,
-            keys=common_variable_names,
-        )
+
+        if adios_trainset is None:
+            adios_trainset = AdiosDataset(
+                fname,
+                "trainset",
+                local_comm,
+                var_config=var_config,
+                keys=common_variable_names,
+            )
+
+        if adios_valset is None:
+            adios_valset = AdiosDataset(
+                fname,
+                "valset",
+                local_comm,
+                var_config=var_config,
+                keys=common_variable_names,
+            )
+
+        if adios_testset is None:
+            adios_testset = AdiosDataset(
+                fname,
+                "testset",
+                local_comm,
+                var_config=var_config,
+                keys=common_variable_names,
+            )
 
         ## Set local set
         num_samples_list = list()
-        for dataset in [trainset, valset]:
+        for dataset in [adios_trainset, adios_valset]:
             rx = list(nsplit(range(len(dataset)), local_comm_size))[local_comm_rank]
             rx_limit = len(rx)
             if args.task_parallel:
@@ -348,22 +356,22 @@ if __name__ == "__main__":
                 rx_limit = comm.allreduce(len(rx), op=MPI.MAX) if args.oversampling else comm.allreduce(len(rx), op=MPI.MIN)
 
             print("local dataset:", local_comm_rank, local_comm_size, dataset.label, len(rx), rx_limit)
-            if args.num_samples is not None:
-                if args.num_samples > rx_limit:
+            if in_num_samples is not None:
+                if in_num_samples > rx_limit:
                     log(
                         f"WARN: requested samples are larger than what is available. Use only {len(rx)}: {dataset.label}"
                     )
                 else:
-                    rx_limit = args.num_samples
+                    rx_limit = in_num_samples
 
             if rx_limit < len(rx):
                 rx = rx[:rx_limit]
-            print(rank, f"Oversampling ratio: {dataset.label} {len(rx)*local_comm_size/len(trainset)*100:.02f} (%)")
+            print(rank, f"Oversampling ratio: {dataset.label} {len(rx)*local_comm_size/len(adios_trainset)*100:.02f} (%)")
             num_samples_list.append(rx_limit)
             dataset.setkeys(common_variable_names)
             dataset.setsubset(rx[0], rx[-1] + 1, preload=True)
 
-        for dataset in [testset]:
+        for dataset in [adios_testset]:
             rx = list(nsplit(range(len(dataset)), local_comm_size))[local_comm_rank]
             rx_limit = len(rx)
             if args.task_parallel:
@@ -374,8 +382,8 @@ if __name__ == "__main__":
             num_samples = rx_limit
             if args.num_test_samples is not None:
                 num_samples = args.num_test_samples
-            elif args.num_samples is not None:
-                num_samples = args.num_samples
+            elif in_num_samples is not None:
+                num_samples = in_num_samples
             if num_samples < rx_limit:
                 rx_limit = num_samples
 
@@ -414,16 +422,16 @@ if __name__ == "__main__":
         if args.ddstore:
             opt = {"ddstore_width": args.ddstore_width, "local": True}
             if args.task_parallel:
-                trainset = DistDataset(trainset, "trainset", local_comm, **opt)
-                valset = DistDataset(valset, "valset", local_comm, **opt)
-                testset = DistDataset(testset, "testset", local_comm, **opt)
+                trainset = DistDataset(adios_trainset, "trainset", local_comm, **opt)
+                valset = DistDataset(adios_valset, "valset", local_comm, **opt)
+                testset = DistDataset(adios_testset, "testset", local_comm, **opt)
                 trainset.pna_deg = pna_deg
                 valset.pna_deg = pna_deg
                 testset.pna_deg = pna_deg
             else:
-                trainset = DistDataset(trainset, "trainset", comm, **opt)
-                valset = DistDataset(valset, "valset", comm, **opt)
-                testset = DistDataset(testset, "testset", comm, **opt)
+                trainset = DistDataset(adios_trainset, "trainset", comm, **opt)
+                valset = DistDataset(adios_valset, "valset", comm, **opt)
+                testset = DistDataset(adios_testset, "testset", comm, **opt)
                 trainset.pna_deg = pna_deg
                 valset.pna_deg = pna_deg
                 testset.pna_deg = pna_deg
@@ -494,6 +502,7 @@ if __name__ == "__main__":
     else:
         context = nullcontext()
 
+    # MPI.COMM_WORLD.Barrier()
     with context:
         hydragnn.train.train_validate_test(
             model,
@@ -508,6 +517,7 @@ if __name__ == "__main__":
             verbosity,
             create_plots=False,
         )
+    # MPI.COMM_WORLD.Barrier()
 
     hydragnn.utils.model.save_model(model, optimizer, log_name)
     hydragnn.utils.profiling_and_tracing.print_timers(verbosity)
@@ -520,4 +530,24 @@ if __name__ == "__main__":
             gp.pr_file(os.path.join("logs", log_name, "gp_timing.p%d" % rank))
         gp.pr_summary_file(os.path.join("logs", log_name, "gp_timing.summary"))
         gp.finalize()
-    sys.exit(0)
+
+    log0("DONE")
+    return adios_trainset, adios_valset, adios_testset
+
+
+if __name__ == "__main__":
+    adios_trainset = None
+    adios_valset = None
+    adios_testset = None
+
+    nprocs = MPI.COMM_WORLD.Get_size()
+
+    for ebs in [512,1024]:
+        lbs = ebs // nprocs
+        num_samples = ebs * 5
+
+        if lbs < 32 or lbs > 4096:
+            continue
+
+        adios_trainset, adios_valset, adios_testset = main(lbs, num_samples, adios_trainset, adios_valset, adios_testset)
+
