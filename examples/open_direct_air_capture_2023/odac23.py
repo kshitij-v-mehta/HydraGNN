@@ -1,4 +1,4 @@
-import os, random, torch, glob, sys
+import os, random, torch, glob, sys, pickle, pdb
 import numpy as np
 from mpi4py import MPI
 from yaml import full_load
@@ -119,14 +119,14 @@ class ODAC2023(AbstractBaseDataset):
                 continue
 
             if data_type == "train":
-                rx = list(range(dataset.num_samples))
+                rx = list(range(len(dataset)))
             else:
-                rx = list(nsplit(list(range(dataset.num_samples)), self.world_size))[
+                rx = list(nsplit(list(range(len(dataset))), self.world_size))[
                     self.rank
                 ]
 
             print(
-                f"Rank: {self.rank}, dataname: {fullpath}, data_type: {data_type}, num_samples: {dataset.num_samples}, len(rx): {len(rx)}"
+                f"Rank: {self.rank}, dataname: {fullpath}, data_type: {data_type}, num_samples: {len(dataset)}, len(rx): {len(rx)}"
             )
 
             # for index in iterate_tqdm(
