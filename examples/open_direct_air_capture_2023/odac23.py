@@ -243,9 +243,9 @@ class ODAC2023(AbstractBaseDataset):
 
             cell = None
             try:
-                cell = torch.tensor(
-                    dataset.get(index).get_cell(), dtype=torch.float32
-                ).view(3, 3)
+                # cell = torch.tensor(
+                #     dataset.get(index).get_cell(), dtype=torch.float32
+                # ).view(3, 3)
                 cell = torch.from_numpy(
                     np.asarray(dataset.get(index).get_cell())
                 ).to(
