@@ -135,7 +135,7 @@ class ODAC2023(AbstractBaseDataset):
             #     desc=f"Rank{self.rank} Dataset {dataset_index}/{len(dataset_list)}",
             # ):
 
-            for index in rx:
+            for index in iterate_tqdm(rx, verbosity_level=2, desc="pytorch data object creation"):
                 self._create_pytorch_data_object(dataset, index)
 
         print(
@@ -156,11 +156,15 @@ class ODAC2023(AbstractBaseDataset):
             total_file_list = glob.glob(
                 os.path.join(dirpath, data_type, "**/*.extxyz"), recursive=True
             )
+            print(f"Root sees {len(total_file_list)} *.extxyz files", flush=True)
+            # total_file_list = total_file_list[:len(total_file_list)//10]
         total_file_list = self.comm.bcast(total_file_list, root=0)
 
         # evenly distribute amongst all ranks to get num samples
         rx = list(nsplit(total_file_list, self.world_size))[self.rank]
         datasets = rx
+
+        print(f"Rank {self.rank} reading num samples from {len(datasets)} files assigned to it.", flush=True)
 
         # Get num samples for all datasets assigned to this process
         for d in iterate_tqdm(datasets, verbosity_level=2, desc="Data Parsing"):
