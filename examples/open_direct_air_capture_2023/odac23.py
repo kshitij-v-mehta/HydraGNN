@@ -148,7 +148,7 @@ class ODAC2023(AbstractBaseDataset):
         random.shuffle(self.dataset)
 
     def _get_datasets_assigned_to_me(self, dirpath, data_type):
-        datasets_info = []
+        datasets_info = list()
 
         # get the list of ase lmdb files
         total_file_list = None
@@ -167,6 +167,7 @@ class ODAC2023(AbstractBaseDataset):
         print(f"Rank {self.rank} reading num samples from {len(datasets)} files assigned to it.", flush=True)
 
         # Get num samples for all datasets assigned to this process
+        total_num_samples = 0
         for d in iterate_tqdm(datasets, verbosity_level=2, desc="Data Parsing"):
             fullpath = os.path.join(dirpath, data_type, d)
             try:
@@ -176,17 +177,47 @@ class ODAC2023(AbstractBaseDataset):
                 continue
 
             num_samples = len(dataset)
-            datasets_info.append(
-                {"dataset_fullpath": fullpath, "num_samples": num_samples}
-            )
+            total_num_samples += num_samples
+            datasets_info.append({"dataset_fullpath": fullpath, "num_samples": num_samples})
+
+        print(f"Rank {self.rank} has {total_num_samples} num samples from {len(datasets)} datasets assigned to it", flush=True)
 
         # All gather so everyone has all num samples information
-        _all_datasets_info = self.comm.allgather(datasets_info)
-        all_datasets_info = [item for sublist in _all_datasets_info for item in sublist]
+        # _all_datasets_info = self.comm.allgather(datasets_info)
+        # all_datasets_info = [item for sublist in _all_datasets_info for item in sublist]
+        all_datasets_info = self._allgather_datasetsinfo(datasets_info)
 
         # Call workload distributor to assign datasets to processes
+        print(f"Rank {self.rank} calling load balancer", flush=True)
         my_datasets = balance_load(all_datasets_info, self.world_size, self.rank)
         return my_datasets
+
+    def _allgather_datasetsinfo(self, datasets_info):
+        """Alltoall exchange of datasetsinfo by serializing the list of dictionaries.
+        """
+
+        # serialize using pickle
+        serialized = pickle.dumps(datasets_info)
+        send_size = len(serialized)
+        all_sizes = self.comm.allgather(send_size)
+        displacements = [sum(all_sizes[:i]) for i in range(self.world_size)]
+        total_size = sum(all_sizes)
+        recv_buf = bytearray(total_size)
+
+        # all to all exchange
+        self.comm.Allgatherv([serialized, MPI.BYTE], [recv_buf, (all_sizes, displacements), MPI.BYTE])
+
+        # deserialize
+        all_datasets_info = list()
+        for i in range(self.world_size):
+            start = displacements[i]
+            end = start+all_sizes[i]
+            data_bytes = recv_buf[start:end]
+            d_list = pickle.loads(data_bytes)
+            for d in d_list:
+                all_datasets_info.append(d)
+
+        return all_datasets_info
 
     def _create_pytorch_data_object(self, dataset, index):
         try:
