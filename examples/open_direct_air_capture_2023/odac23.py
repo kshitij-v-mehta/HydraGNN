@@ -1,7 +1,9 @@
-import os, random, torch, glob, sys, pickle, pdb
+import os, random, torch, glob, sys, pickle, shutil, pdb
 import numpy as np
 from mpi4py import MPI
 from yaml import full_load
+from datetime import datetime
+import threading, queue
 
 from hydragnn.utils.datasets.abstractbasedataset import AbstractBaseDataset
 from torch_geometric.transforms import Distance, Spherical, LocalCartesian
@@ -34,6 +36,27 @@ import os
 from typing import List
 
 from hydragnn.utils.print.print_utils import iterate_tqdm, log
+
+
+def async_fileio(q, dataset_list):
+    for dataset_dict in dataset_list:
+        fullpath = dataset_dict["dataset_fullpath"]
+        filename = os.path.basename(fullpath)
+        splitdir = os.path.basename(os.path.dirname(fullpath))
+        trainorval = os.path.basename(os.path.dirname(os.path.dirname(fullpath)))
+        tmpsplit = os.path.join("/tmp",trainorval,splitdir)
+        tmppath = os.path.join(tmpsplit,filename)
+        
+        os.makedirs(os.path.join("/tmp", trainorval), exist_ok=True)
+        os.makedirs(tmpsplit, exist_ok=True)
+
+        if not os.path.isfile(tmppath):
+            shutil.copy(fullpath,tmppath)
+            print(f"created {tmppath} from {fullpath}")
+        else:
+            print(f"found existing {tmppath}")
+        q.put(tmppath)
+    q.put(None)
 
 
 class ExtendedXYZDataset(Dataset):
@@ -107,11 +130,25 @@ class ODAC2023(AbstractBaseDataset):
             self.rank = torch.distributed.get_rank()
         self.comm = comm
 
+        print(f"Rank {self.rank} in class ODAC2023 at time {datetime.now()}")
+
         # Parallelizing over data files for training data. For val set, we parallelize over each molecules.
         dataset_list = self._get_datasets_assigned_to_me(dirpath, data_type)
 
-        for dataset_index, dataset_dict in enumerate(dataset_list):
-            fullpath = dataset_dict["dataset_fullpath"]
+        q = queue.Queue()
+        fileio_thread = threading.Thread(target=async_fileio, args=(q,dataset_list,))
+        fileio_thread.start()
+
+        # for dataset_index, dataset_dict in enumerate(dataset_list):
+        done = False
+        while not done:
+            fullpath = q.get()
+            q.task_done()
+            if fullpath is None:
+                print(f"Received None from queue")
+                break
+
+            # fullpath = dataset_dict["dataset_fullpath"]
             try:
                 dataset = ExtendedXYZDataset(extxyz_filename=fullpath)
             except ValueError as e:
@@ -138,6 +175,9 @@ class ODAC2023(AbstractBaseDataset):
             for index in iterate_tqdm(rx, verbosity_level=2, desc="pytorch data object creation"):
                 self._create_pytorch_data_object(dataset, index)
 
+            # remove from /tmp
+            os.remove(fullpath)
+
         print(
             self.rank,
             f"Rank {self.rank} done creating pytorch data objects for {data_type}. Waiting on barrier.",
@@ -145,7 +185,10 @@ class ODAC2023(AbstractBaseDataset):
         )
         torch.distributed.barrier()
 
-        random.shuffle(self.dataset)
+        q.join()
+        fileio_thread.join()
+
+        # random.shuffle(self.dataset)
 
     def _get_datasets_assigned_to_me(self, dirpath, data_type):
         datasets_info = list()
@@ -157,7 +200,7 @@ class ODAC2023(AbstractBaseDataset):
                 os.path.join(dirpath, data_type, "**/*.extxyz"), recursive=True
             )
             print(f"Root sees {len(total_file_list)} *.extxyz files", flush=True)
-            # total_file_list = total_file_list[:len(total_file_list)//10]
+            # total_file_list = total_file_list[:4]
         total_file_list = self.comm.bcast(total_file_list, root=0)
 
         # evenly distribute amongst all ranks to get num samples
@@ -168,8 +211,23 @@ class ODAC2023(AbstractBaseDataset):
 
         # Get num samples for all datasets assigned to this process
         total_num_samples = 0
-        for d in iterate_tqdm(datasets, verbosity_level=2, desc="Data Parsing"):
-            fullpath = os.path.join(dirpath, data_type, d)
+        
+        datasets = [{"dataset_fullpath": os.path.join(dirpath, data_type, d)} for d in datasets]
+        q = queue.Queue()
+        fileio_thread = threading.Thread(target=async_fileio, args=(q,datasets,))
+        fileio_thread.start()
+
+        # for d in iterate_tqdm(datasets, verbosity_level=2, desc="Data Parsing"):
+        done = False 
+        while not done:
+            # fullpath = d['dataset_fullpath']
+            fullpath = q.get()
+            q.task_done()
+            if fullpath is None:
+                print(f"received None from q")
+                break
+
+            print(fullpath)
             try:
                 dataset = ExtendedXYZDataset(extxyz_filename=fullpath)
             except ValueError as e:
@@ -180,7 +238,9 @@ class ODAC2023(AbstractBaseDataset):
             total_num_samples += num_samples
             datasets_info.append({"dataset_fullpath": fullpath, "num_samples": num_samples})
 
-        print(f"Rank {self.rank} has {total_num_samples} num samples from {len(datasets)} datasets assigned to it", flush=True)
+        q.join()
+        fileio_thread.join()
+        print(f"Rank {self.rank}, {datetime.now()} has {total_num_samples} num samples from {len(datasets)} datasets assigned to it", flush=True)
 
         # All gather so everyone has all num samples information
         # _all_datasets_info = self.comm.allgather(datasets_info)
@@ -355,3 +415,4 @@ class ODAC2023(AbstractBaseDataset):
 
     def get(self, idx):
         return self.dataset[idx]
+
