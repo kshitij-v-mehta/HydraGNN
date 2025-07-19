@@ -1,4 +1,4 @@
-import os, random, torch, glob, sys, pickle, shutil, pdb
+import os, random, torch, glob, sys, pickle, shutil, traceback, pdb
 import numpy as np
 from mpi4py import MPI
 from yaml import full_load
@@ -39,24 +39,34 @@ from hydragnn.utils.print.print_utils import iterate_tqdm, log
 
 
 def async_fileio(q, dataset_list):
-    for dataset_dict in dataset_list:
-        fullpath = dataset_dict["dataset_fullpath"]
-        filename = os.path.basename(fullpath)
-        splitdir = os.path.basename(os.path.dirname(fullpath))
-        trainorval = os.path.basename(os.path.dirname(os.path.dirname(fullpath)))
-        tmpsplit = os.path.join("/tmp",trainorval,splitdir)
-        tmppath = os.path.join(tmpsplit,filename)
-        
-        os.makedirs(os.path.join("/tmp", trainorval), exist_ok=True)
-        os.makedirs(tmpsplit, exist_ok=True)
+    try:
+        for dataset_dict in dataset_list:
+            fullpath = dataset_dict["dataset_fullpath"]
+            filename = os.path.basename(fullpath)
+            splitdir = os.path.basename(os.path.dirname(fullpath))
+            trainorval = os.path.basename(os.path.dirname(os.path.dirname(fullpath)))
+            tmpsplit = os.path.join("/tmp",trainorval,splitdir)
+            tmppath = os.path.join(tmpsplit,filename)
+            
+            os.makedirs(os.path.join("/tmp", trainorval), exist_ok=True)
+            os.makedirs(tmpsplit, exist_ok=True)
 
-        if not os.path.isfile(tmppath):
-            shutil.copy(fullpath,tmppath)
-            print(f"created {tmppath} from {fullpath}")
-        else:
-            print(f"found existing {tmppath}")
-        q.put(tmppath)
-    q.put(None)
+            if not os.path.isfile(tmppath):
+                print(f"creating {tmppath} from {fullpath}")
+                shutil.copy(fullpath,tmppath)
+                print(f"created {tmppath} from {fullpath}")
+            else:
+                print(f"found existing {tmppath}")
+
+            if "split_00398/27915" in tmppath:
+                print("Ignoring 27915")
+            else:
+                q.put(tmppath)
+        q.put(None)
+    except Exception as e:
+        print(e)
+        print(traceback.format_exc())
+        MPI.COMM_WORLD.Abort(1)
 
 
 class ExtendedXYZDataset(Dataset):
@@ -98,97 +108,104 @@ class ODAC2023(AbstractBaseDataset):
         dist=False,
         comm=MPI.COMM_WORLD,
     ):
-        super().__init__()
+        try:
+            super().__init__()
 
-        assert (data_type == "train") or (
-            data_type == "val"
-        ), "data_type must be a string either equal to 'train' or to 'val'"
+            assert (data_type == "train") or (
+                data_type == "val"
+            ), "data_type must be a string either equal to 'train' or to 'val'"
 
-        self.config = config
-        self.radius = config["NeuralNetwork"]["Architecture"]["radius"]
-        self.max_neighbours = config["NeuralNetwork"]["Architecture"]["max_neighbours"]
+            self.config = config
+            self.radius = config["NeuralNetwork"]["Architecture"]["radius"]
+            self.max_neighbours = config["NeuralNetwork"]["Architecture"]["max_neighbours"]
 
-        self.data_path = os.path.join(dirpath, data_type)
-        self.energy_per_atom = energy_per_atom
+            self.data_path = os.path.join(dirpath, data_type)
+            self.energy_per_atom = energy_per_atom
 
-        self.radius_graph = RadiusGraph(
-            self.radius, loop=False, max_num_neighbors=self.max_neighbours
-        )
-        self.radius_graph_pbc = RadiusGraphPBC(
-            self.radius, loop=False, max_num_neighbors=self.max_neighbours
-        )
-
-        self.graphgps_transform = graphgps_transform
-
-        # Threshold for atomic forces in eV/angstrom
-        self.forces_norm_threshold = 1000.0
-
-        self.dist = dist
-        if self.dist:
-            assert torch.distributed.is_initialized()
-            self.world_size = torch.distributed.get_world_size()
-            self.rank = torch.distributed.get_rank()
-        self.comm = comm
-
-        print(f"Rank {self.rank} in class ODAC2023 at time {datetime.now()}")
-
-        # Parallelizing over data files for training data. For val set, we parallelize over each molecules.
-        dataset_list = self._get_datasets_assigned_to_me(dirpath, data_type)
-
-        q = queue.Queue()
-        fileio_thread = threading.Thread(target=async_fileio, args=(q,dataset_list,))
-        fileio_thread.start()
-
-        # for dataset_index, dataset_dict in enumerate(dataset_list):
-        done = False
-        while not done:
-            fullpath = q.get()
-            q.task_done()
-            if fullpath is None:
-                print(f"Received None from queue")
-                break
-
-            # fullpath = dataset_dict["dataset_fullpath"]
-            try:
-                dataset = ExtendedXYZDataset(extxyz_filename=fullpath)
-            except ValueError as e:
-                print(f"{fullpath} not a valid ase lmdb dataset. Ignoring ...")
-                continue
-
-            if data_type == "train":
-                rx = list(range(len(dataset)))
-            else:
-                rx = list(nsplit(list(range(len(dataset))), self.world_size))[
-                    self.rank
-                ]
-
-            print(
-                f"Rank: {self.rank}, dataname: {fullpath}, data_type: {data_type}, num_samples: {len(dataset)}, len(rx): {len(rx)}"
+            self.radius_graph = RadiusGraph(
+                self.radius, loop=False, max_num_neighbors=self.max_neighbours
+            )
+            self.radius_graph_pbc = RadiusGraphPBC(
+                self.radius, loop=False, max_num_neighbors=self.max_neighbours
             )
 
-            # for index in iterate_tqdm(
-            #     rx,
-            #     verbosity_level=2,
-            #     desc=f"Rank{self.rank} Dataset {dataset_index}/{len(dataset_list)}",
-            # ):
+            self.graphgps_transform = graphgps_transform
 
-            for index in iterate_tqdm(rx, verbosity_level=2, desc="pytorch data object creation"):
-                self._create_pytorch_data_object(dataset, index)
+            # Threshold for atomic forces in eV/angstrom
+            self.forces_norm_threshold = 1000.0
 
-            # remove from /tmp
-            os.remove(fullpath)
+            self.dist = dist
+            if self.dist:
+                assert torch.distributed.is_initialized()
+                self.world_size = torch.distributed.get_world_size()
+                self.rank = torch.distributed.get_rank()
+            self.comm = comm
 
-        print(
-            self.rank,
-            f"Rank {self.rank} done creating pytorch data objects for {data_type}. Waiting on barrier.",
-            flush=True,
-        )
-        torch.distributed.barrier()
+            print(f"Rank {self.rank} in class ODAC2023 at time {datetime.now()}")
 
-        q.join()
-        fileio_thread.join()
+            # Parallelizing over data files for training data. For val set, we parallelize over each molecules.
+            dataset_list = self._get_datasets_assigned_to_me(dirpath, data_type)
 
-        # random.shuffle(self.dataset)
+            q = queue.Queue()
+            fileio_thread = threading.Thread(target=async_fileio, args=(q,dataset_list,))
+            fileio_thread.start()
+
+            # for dataset_index, dataset_dict in enumerate(dataset_list):
+            done = False
+            while not done:
+                fullpath = q.get()
+                q.task_done()
+                if fullpath is None:
+                    print(f"Received None from queue")
+                    break
+
+                # fullpath = dataset_dict["dataset_fullpath"]
+                try:
+                    dataset = ExtendedXYZDataset(extxyz_filename=fullpath)
+                except ValueError as e:
+                    print(f"{fullpath} not a valid ase lmdb dataset. Ignoring ...")
+                    continue
+
+                if data_type == "train":
+                    rx = list(range(len(dataset)))
+                else:
+                    rx = list(nsplit(list(range(len(dataset))), self.world_size))[
+                        self.rank
+                    ]
+
+                print(
+                    f"Rank: {self.rank}, dataname: {fullpath}, data_type: {data_type}, num_samples: {len(dataset)}, len(rx): {len(rx)}"
+                )
+
+                # for index in iterate_tqdm(
+                #     rx,
+                #     verbosity_level=2,
+                #     desc=f"Rank{self.rank} Dataset {dataset_index}/{len(dataset_list)}",
+                # ):
+
+                for index in iterate_tqdm(rx, verbosity_level=2, desc="pytorch data object creation"):
+                    self._create_pytorch_data_object(dataset, index)
+
+                # remove from /tmp
+                os.remove(fullpath)
+
+            print(
+                self.rank,
+                f"Rank {self.rank} done creating pytorch data objects for {data_type}. Waiting on barrier.",
+                flush=True,
+            )
+            torch.distributed.barrier()
+
+            q.join()
+            fileio_thread.join()
+
+            # random.shuffle(self.dataset)
+
+        except Exception as e:
+            print(e)
+            print(traceback.format_exc())
+            MPI.COMM_WORLD.Abort(1)
+
 
     def _get_datasets_assigned_to_me(self, dirpath, data_type):
         datasets_info = list()
@@ -206,18 +223,28 @@ class ODAC2023(AbstractBaseDataset):
         # evenly distribute amongst all ranks to get num samples
         rx = list(nsplit(total_file_list, self.world_size))[self.rank]
         datasets = rx
+        
+        # ----------- #
+        datasets_info = [{"dataset_fullpath": os.path.join(dirpath, data_type, d)} for d in datasets]
+        return datasets_info
+        # ----------- #
+
+        # **************************** #
+
 
         print(f"Rank {self.rank} reading num samples from {len(datasets)} files assigned to it.", flush=True)
+        datasets = [{"dataset_fullpath": os.path.join(dirpath, data_type, d)} for d in datasets]
 
         # Get num samples for all datasets assigned to this process
         total_num_samples = 0
         
-        datasets = [{"dataset_fullpath": os.path.join(dirpath, data_type, d)} for d in datasets]
         q = queue.Queue()
         fileio_thread = threading.Thread(target=async_fileio, args=(q,datasets,))
         fileio_thread.start()
 
         # for d in iterate_tqdm(datasets, verbosity_level=2, desc="Data Parsing"):
+        if self.rank == 361:
+            print(f"Starting loop to call ExtendedXYZDataset")
         done = False 
         while not done:
             # fullpath = d['dataset_fullpath']
@@ -227,9 +254,12 @@ class ODAC2023(AbstractBaseDataset):
                 print(f"received None from q")
                 break
 
-            print(fullpath)
             try:
+                if self.rank == 361:
+                    print(f"Calling ExtendedXYZDataset on {fullpath}")
                 dataset = ExtendedXYZDataset(extxyz_filename=fullpath)
+                if self.rank == 361:
+                    print(f"Returned successfully from ExtendedXYZDataset on {fullpath}")
             except ValueError as e:
                 print(f"{fullpath} is not a valid Extended XYZ dataset. Ignoring ...")
                 continue
@@ -238,6 +268,7 @@ class ODAC2023(AbstractBaseDataset):
             total_num_samples += num_samples
             datasets_info.append({"dataset_fullpath": fullpath, "num_samples": num_samples})
 
+        print(f"Rank {self.rank} done reading num samples. Now terminating thread and queue")
         q.join()
         fileio_thread.join()
         print(f"Rank {self.rank}, {datetime.now()} has {total_num_samples} num samples from {len(datasets)} datasets assigned to it", flush=True)
