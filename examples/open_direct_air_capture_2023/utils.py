@@ -4,6 +4,7 @@ import heapq, random
 def balance_load(dataset_list, nranks, me):
     indexed_lists = []
     for i, lstitem in enumerate(dataset_list):
+        assert type(lstitem) == dict, f"{type(lstitem)}, {lstitem}"
         indexed_lists.append({"id": i, "num_samples": lstitem["num_samples"]})
 
     # Create a sorted list in desc order that records the id and count of num_samples
@@ -29,7 +30,7 @@ def balance_load(dataset_list, nranks, me):
         load, rank, assigned_datasets = heapq.heappop(heap)
         if rank == me:
             print(
-                f"load balancing. Rank {rank}: num_samples: {load}, number of datasets: {len(assigned_datasets)}"
+                f"load balancing. Rank {rank}: num_samples: {load}, number of datasets: {len(assigned_datasets)}", flush=True
             )
             return assigned_datasets
 
