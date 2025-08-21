@@ -4,6 +4,7 @@ import sys
 from mpi4py import MPI
 import argparse
 import torch
+import socket
 
 # FIX random seed
 random_state = 0
@@ -108,6 +109,8 @@ if __name__ == "__main__":
     node_feature_dims = [1, 3, 3]
     dirpwd = os.path.dirname(os.path.abspath(__file__))
     datadir = os.path.join(dirpwd, "dataset")
+    datadir = "/lustre/orion/lrn070/world-shared/mlupopa/Supercomputing2025/HydraGNN/examples/open_direct_air_capture_2023/dataset"
+    # datadir = "/mnt/bb/kmehta/dataset"
     ##################################################################################################################
     input_filename = os.path.join(dirpwd, args.inputfile)
     ##################################################################################################################
@@ -155,6 +158,8 @@ if __name__ == "__main__":
     writer = hydragnn.utils.model.get_summary_writer(log_name)
 
     log("Command: {0}\n".format(" ".join([x for x in sys.argv])), rank=0)
+
+    print(f"Rank {rank} is on node {socket.gethostname()}", flush=True)
 
     modelname = "ODAC23" if args.modelname is None else args.modelname
     if args.preonly:
