@@ -52,17 +52,14 @@ def async_fileio(q, dataset_list):
             os.makedirs(tmpsplit, exist_ok=True)
 
             if not os.path.isfile(tmppath):
-                print(f"creating {tmppath} from {fullpath}")
                 shutil.copy(fullpath,tmppath)
-                print(f"created {tmppath} from {fullpath}")
-            else:
-                print(f"found existing {tmppath}")
+                # print(f"created {tmppath} from {fullpath}")
+            # else:
+                # print(f"found existing {tmppath}")
 
-            if "split_00398/27915" in tmppath:
-                print("Ignoring 27915")
-            else:
-                q.put(tmppath)
+            q.put(tmppath)
         q.put(None)
+        print(f"Put None in queue")
     except Exception as e:
         print(e)
         print(traceback.format_exc())
@@ -146,26 +143,35 @@ class ODAC2023(AbstractBaseDataset):
             # Parallelizing over data files for training data. For val set, we parallelize over each molecules.
             dataset_list = self._get_datasets_assigned_to_me(dirpath, data_type)
 
-            q = queue.Queue()
+            q = queue.Queue(maxsize=5)
             fileio_thread = threading.Thread(target=async_fileio, args=(q,dataset_list,))
             fileio_thread.start()
 
             # for dataset_index, dataset_dict in enumerate(dataset_list):
             done = False
+            file_count = 0
             while not done:
+                print(f"Rank {self.rank} waiting on queue")
                 fullpath = q.get()
-                q.task_done()
+                print(f"Rank {self.rank} received {fullpath} from  queue")
                 if fullpath is None:
                     print(f"Received None from queue")
+                    q.task_done()
                     break
 
+                file_count += 1
                 # fullpath = dataset_dict["dataset_fullpath"]
                 try:
                     dataset = ExtendedXYZDataset(extxyz_filename=fullpath)
+                    print(f"Rank {self.rank} created ExtendedXYZDataset from {fullpath}")
                 except ValueError as e:
                     print(f"{fullpath} not a valid ase lmdb dataset. Ignoring ...")
                     continue
+                except Exception as e:
+                    print(e)
+                    print(traceback.format_exc())
 
+                # This must be uncommented ----------
                 if data_type == "train":
                     rx = list(range(len(dataset)))
                 else:
@@ -174,7 +180,7 @@ class ODAC2023(AbstractBaseDataset):
                     ]
 
                 print(
-                    f"Rank: {self.rank}, dataname: {fullpath}, data_type: {data_type}, num_samples: {len(dataset)}, len(rx): {len(rx)}"
+                    f"Rank: {self.rank}, dataname: {fullpath}, data_type: {data_type}, num_samples: {len(dataset)}, len(rx): {len(rx)}, file count: {file_count}"
                 )
 
                 # for index in iterate_tqdm(
@@ -183,21 +189,25 @@ class ODAC2023(AbstractBaseDataset):
                 #     desc=f"Rank{self.rank} Dataset {dataset_index}/{len(dataset_list)}",
                 # ):
 
-                for index in iterate_tqdm(rx, verbosity_level=2, desc="pytorch data object creation"):
-                    self._create_pytorch_data_object(dataset, index)
+                # for index in iterate_tqdm(rx, verbosity_level=2, desc="pytorch data object creation"):
+                #     self._create_pytorch_data_object(dataset, index)
 
                 # remove from /tmp
-                os.remove(fullpath)
+                if fullpath.startswith("/tmp/"):
+                    os.remove(fullpath)
+                q.task_done()
 
             print(
                 self.rank,
                 f"Rank {self.rank} done creating pytorch data objects for {data_type}. Waiting on barrier.",
                 flush=True,
             )
-            torch.distributed.barrier()
+            # torch.distributed.barrier()
 
+            print(f"Rank {self.rank} back from barrier wait. Now waiting on thread and queue")
             q.join()
             fileio_thread.join()
+            print(f"Rank {self.rank} done cleaning up thread and queue")
 
             # random.shuffle(self.dataset)
 
@@ -217,7 +227,7 @@ class ODAC2023(AbstractBaseDataset):
                 os.path.join(dirpath, data_type, "**/*.extxyz"), recursive=True
             )
             print(f"Root sees {len(total_file_list)} *.extxyz files", flush=True)
-            # total_file_list = total_file_list[:4]
+            # total_file_list = total_file_list[:200]
         total_file_list = self.comm.bcast(total_file_list, root=0)
 
         # evenly distribute amongst all ranks to get num samples
