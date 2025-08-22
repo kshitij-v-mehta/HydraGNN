@@ -1,9 +1,12 @@
 import os, random, torch, glob, sys, pickle, shutil, traceback, pdb
 import numpy as np
+from joblib.externals.loky import ProcessPoolExecutor
 from mpi4py import MPI
+from mpi4py.futures import MPICommExecutor
 from yaml import full_load
 from datetime import datetime
 import threading, queue
+from sqlite_helper import DB
 
 from hydragnn.utils.datasets.abstractbasedataset import AbstractBaseDataset
 from torch_geometric.transforms import Distance, Spherical, LocalCartesian
@@ -17,8 +20,8 @@ from hydragnn.preprocess.graph_samples_checks_and_updates import (
     gather_deg,
 )
 from hydragnn.utils.distributed import nsplit
-from utils import balance_load
-
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import Process, Manager
 
 # transform_coordinates = Spherical(norm=False, cat=False)
 transform_coordinates = LocalCartesian(norm=False, cat=False)
@@ -93,7 +96,6 @@ class ExtendedXYZDataset(Dataset):
         return atoms
 
 
-
 class ODAC2023(AbstractBaseDataset):
     def __init__(
         self,
@@ -103,6 +105,7 @@ class ODAC2023(AbstractBaseDataset):
         graphgps_transform=None,
         energy_per_atom=True,
         dist=False,
+        stage_db=False,
         comm=MPI.COMM_WORLD,
     ):
         try:
@@ -138,89 +141,91 @@ class ODAC2023(AbstractBaseDataset):
                 self.rank = torch.distributed.get_rank()
             self.comm = comm
 
-            print(f"Rank {self.rank} in class ODAC2023 at time {datetime.now()}")
+            if stage_db:
+                # Stage pyg objects to db and return
 
-            # Parallelizing over data files for training data. For val set, we parallelize over each molecules.
-            dataset_list = self._get_datasets_assigned_to_me(dirpath, data_type)
+                # First level MPI parallelization
+                # Distribute unprocesses ext files amongst MPI ranks
+                # Batch files into sets of w files so that they can be spread amongst processes on a node
+                extfiles = self.get_unprocessed_extfiles(dirpath, data_type)
+                w = os.cpu_count() - 1
+                batches = [extfiles[i:i+w] for i in range(0, len(extfiles), w)]
 
-            q = queue.Queue(maxsize=5)
-            fileio_thread = threading.Thread(target=async_fileio, args=(q,dataset_list,))
-            fileio_thread.start()
+                with MPICommExecutor() as executor:
+                    list(executor.map(self.node_root, batches, chunksize=1))
 
-            # for dataset_index, dataset_dict in enumerate(dataset_list):
-            done = False
-            file_count = 0
-            while not done:
-                print(f"Rank {self.rank} waiting on queue")
-                fullpath = q.get()
-                print(f"Rank {self.rank} received {fullpath} from  queue")
-                if fullpath is None:
-                    print(f"Received None from queue")
-                    q.task_done()
-                    break
-
-                file_count += 1
-                # fullpath = dataset_dict["dataset_fullpath"]
-                try:
-                    dataset = ExtendedXYZDataset(extxyz_filename=fullpath)
-                    print(f"Rank {self.rank} created ExtendedXYZDataset from {fullpath}")
-                except ValueError as e:
-                    print(f"{fullpath} not a valid ase lmdb dataset. Ignoring ...")
-                    continue
-                except Exception as e:
-                    print(e)
-                    print(traceback.format_exc())
-
-                # This must be uncommented ----------
-                if data_type == "train":
-                    rx = list(range(len(dataset)))
-                else:
-                    rx = list(nsplit(list(range(len(dataset))), self.world_size))[
-                        self.rank
-                    ]
-
-                print(
-                    f"Rank: {self.rank}, dataname: {fullpath}, data_type: {data_type}, num_samples: {len(dataset)}, len(rx): {len(rx)}, file count: {file_count}"
-                )
-
-                # for index in iterate_tqdm(
-                #     rx,
-                #     verbosity_level=2,
-                #     desc=f"Rank{self.rank} Dataset {dataset_index}/{len(dataset_list)}",
-                # ):
-
-                # for index in iterate_tqdm(rx, verbosity_level=2, desc="pytorch data object creation"):
-                #     self._create_pytorch_data_object(dataset, index)
-
-                # remove from /tmp
-                if fullpath.startswith("/tmp/"):
-                    os.remove(fullpath)
-                q.task_done()
-
-            print(
-                self.rank,
-                f"Rank {self.rank} done creating pytorch data objects for {data_type}. Waiting on barrier.",
-                flush=True,
-            )
-            # torch.distributed.barrier()
-
-            print(f"Rank {self.rank} back from barrier wait. Now waiting on thread and queue")
-            q.join()
-            fileio_thread.join()
-            print(f"Rank {self.rank} done cleaning up thread and queue")
-
-            # random.shuffle(self.dataset)
+            else:
+                # Read pyg objects from db
+                pass
 
         except Exception as e:
             print(e)
             print(traceback.format_exc())
             MPI.COMM_WORLD.Abort(1)
 
+    def node_root(self, extfilelist):
+        """
+        MPI rank on each node runs this function.
+        It takes in a list of ext files and spawns processes locally to process them in parallel.
+        """
+        with Manager() as m:
+            dbm = DB(self.rank)
+            q = m.Queue()
+            p = Process(target=self.db_writer, args=(q, dbm))
+            p.start()
 
-    def _get_datasets_assigned_to_me(self, dirpath, data_type):
-        datasets_info = list()
+            with ProcessPoolExecutor() as executor:
+                list(executor.map(self.worker, extfilelist, [q] * len(extfilelist), chunksize=1))
 
-        # get the list of ase lmdb files
+            q.put(("_", "DONE"))
+            p.join()
+            print(f"Rank {self.rank} done processing {len(extfilelist)} ext files.", flush=True)
+
+    def db_writer(self, q, dbm: DB):
+        while True:
+            path_id, blob = q.get()
+            if blob == "DONE":
+                break
+            dbm.write(path_id, blob)
+
+    def worker(self, task: tuple, q):
+        """
+        Process that will process an extxyz file and create PyG samples from it.
+        It then serializes the samples and adds them to the queue.
+        """
+        self.dataset = []
+        datadir, data_type, extfile = task
+        try:
+            dataset = ExtendedXYZDataset(extxyz_filename=extfile)
+        except ValueError as e:
+            print(f"{extfile} not a valid ase lmdb dataset. Ignoring ...")
+        except Exception as e:
+            print(e)
+            print(traceback.format_exc())
+
+        if data_type == "train":
+            rx = list(range(len(dataset)))
+        else:
+            rx = list(nsplit(list(range(len(dataset))), self.world_size))[self.rank]
+
+        print(f"Rank: {self.rank}, dataname: {dataset}, data_type: {data_type}, "
+              f"num_samples: {len(dataset)}, len(rx): {len(rx)}")
+
+        for index in iterate_tqdm(rx, verbosity_level=2, desc="pytorch data object creation"):
+            self._create_pytorch_data_object(dataset, index)
+
+        # Serialize the list of samples into a blob to be written to the db
+        blob = pickle.dumps(self.dataset, protocol=pickle.HIGHEST_PROTOCOL)
+        path_id = extfile.removeprefix(datadir)
+        q.put((path_id, blob))
+        self.dataset = []
+
+
+    def get_unprocessed_extfiles(self, dirpath, data_type):
+        pass
+
+
+    def _get_datasets_assigned_to_me(self, dirpath, data_type, dbm):
         total_file_list = None
         if self.rank == 0:
             total_file_list = glob.glob(
@@ -228,97 +233,16 @@ class ODAC2023(AbstractBaseDataset):
             )
             print(f"Root sees {len(total_file_list)} *.extxyz files", flush=True)
             # total_file_list = total_file_list[:200]
+
+            files_done = dbm.get_all_filenames_from_db()
+            total_file_list = set(total_file_list) - set(files_done)
+
         total_file_list = self.comm.bcast(total_file_list, root=0)
 
-        # evenly distribute amongst all ranks to get num samples
+        # evenly distribute amongst all ranks
         rx = list(nsplit(total_file_list, self.world_size))[self.rank]
         datasets = rx
-        
-        # ----------- #
-        datasets_info = [{"dataset_fullpath": os.path.join(dirpath, data_type, d)} for d in datasets]
-        return datasets_info
-        # ----------- #
-
-        # **************************** #
-
-
-        print(f"Rank {self.rank} reading num samples from {len(datasets)} files assigned to it.", flush=True)
-        datasets = [{"dataset_fullpath": os.path.join(dirpath, data_type, d)} for d in datasets]
-
-        # Get num samples for all datasets assigned to this process
-        total_num_samples = 0
-        
-        q = queue.Queue()
-        fileio_thread = threading.Thread(target=async_fileio, args=(q,datasets,))
-        fileio_thread.start()
-
-        # for d in iterate_tqdm(datasets, verbosity_level=2, desc="Data Parsing"):
-        if self.rank == 361:
-            print(f"Starting loop to call ExtendedXYZDataset")
-        done = False 
-        while not done:
-            # fullpath = d['dataset_fullpath']
-            fullpath = q.get()
-            q.task_done()
-            if fullpath is None:
-                print(f"received None from q")
-                break
-
-            try:
-                if self.rank == 361:
-                    print(f"Calling ExtendedXYZDataset on {fullpath}")
-                dataset = ExtendedXYZDataset(extxyz_filename=fullpath)
-                if self.rank == 361:
-                    print(f"Returned successfully from ExtendedXYZDataset on {fullpath}")
-            except ValueError as e:
-                print(f"{fullpath} is not a valid Extended XYZ dataset. Ignoring ...")
-                continue
-
-            num_samples = len(dataset)
-            total_num_samples += num_samples
-            datasets_info.append({"dataset_fullpath": fullpath, "num_samples": num_samples})
-
-        print(f"Rank {self.rank} done reading num samples. Now terminating thread and queue")
-        q.join()
-        fileio_thread.join()
-        print(f"Rank {self.rank}, {datetime.now()} has {total_num_samples} num samples from {len(datasets)} datasets assigned to it", flush=True)
-
-        # All gather so everyone has all num samples information
-        # _all_datasets_info = self.comm.allgather(datasets_info)
-        # all_datasets_info = [item for sublist in _all_datasets_info for item in sublist]
-        all_datasets_info = self._allgather_datasetsinfo(datasets_info)
-
-        # Call workload distributor to assign datasets to processes
-        print(f"Rank {self.rank} calling load balancer", flush=True)
-        my_datasets = balance_load(all_datasets_info, self.world_size, self.rank)
-        return my_datasets
-
-    def _allgather_datasetsinfo(self, datasets_info):
-        """Alltoall exchange of datasetsinfo by serializing the list of dictionaries.
-        """
-
-        # serialize using pickle
-        serialized = pickle.dumps(datasets_info)
-        send_size = len(serialized)
-        all_sizes = self.comm.allgather(send_size)
-        displacements = [sum(all_sizes[:i]) for i in range(self.world_size)]
-        total_size = sum(all_sizes)
-        recv_buf = bytearray(total_size)
-
-        # all to all exchange
-        self.comm.Allgatherv([serialized, MPI.BYTE], [recv_buf, (all_sizes, displacements), MPI.BYTE])
-
-        # deserialize
-        all_datasets_info = list()
-        for i in range(self.world_size):
-            start = displacements[i]
-            end = start+all_sizes[i]
-            data_bytes = recv_buf[start:end]
-            d_list = pickle.loads(data_bytes)
-            for d in d_list:
-                all_datasets_info.append(d)
-
-        return all_datasets_info
+        return datasets
 
     def _create_pytorch_data_object(self, dataset, index):
         try:
@@ -456,4 +380,3 @@ class ODAC2023(AbstractBaseDataset):
 
     def get(self, idx):
         return self.dataset[idx]
-

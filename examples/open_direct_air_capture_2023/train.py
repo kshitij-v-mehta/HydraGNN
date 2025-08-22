@@ -34,11 +34,7 @@ from hydragnn.preprocess.graph_samples_checks_and_updates import (
 from hydragnn.preprocess.load_data import split_dataset
 import hydragnn.utils.profiling_and_tracing.tracer as tr
 from hydragnn.utils.print.print_utils import iterate_tqdm, log
-
-try:
-    from hydragnn.utils.datasets.adiosdataset import AdiosWriter, AdiosDataset
-except ImportError:
-    pass
+from hydragnn.utils.datasets.adiosdataset import AdiosWriter, AdiosDataset
 
 import subprocess
 from hydragnn.utils.distributed import nsplit
@@ -109,7 +105,7 @@ if __name__ == "__main__":
     node_feature_dims = [1, 3, 3]
     dirpwd = os.path.dirname(os.path.abspath(__file__))
     datadir = os.path.join(dirpwd, "dataset")
-    datadir = "/lustre/orion/lrn070/world-shared/mlupopa/Supercomputing2025/HydraGNN/examples/open_direct_air_capture_2023/dataset"
+    # datadir = "/lustre/orion/lrn070/world-shared/mlupopa/Supercomputing2025/HydraGNN/examples/open_direct_air_capture_2023/dataset"
     # datadir = "/mnt/bb/kmehta/dataset"
     ##################################################################################################################
     input_filename = os.path.join(dirpwd, args.inputfile)
@@ -162,7 +158,12 @@ if __name__ == "__main__":
     print(f"Rank {rank} is on node {socket.gethostname()}", flush=True)
 
     modelname = "ODAC23" if args.modelname is None else args.modelname
-    if args.preonly:
+
+    # writes pyg objects as blob to a sqlite db.
+    if args.stagetodb:
+        sys.exit(0)
+
+    elif args.preonly:
         ## local data
         trainset = ODAC2023(
             os.path.join(datadir),
