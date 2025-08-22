@@ -2,15 +2,14 @@ import sqlite3
 
 
 class DB:
-    def __init__(self, rank):
+    def __init__(self, db_name):
         self.conn = None
         self.cur = None
-        self.rank = rank
 
-        self.create_sqlite(rank)
+        self.create_sqlite(db_name)
 
-    def create_sqlite(self, rank):
-        self.conn = sqlite3.connect(f"odac23_{rank}.db")
+    def create_sqlite(self, db_name):
+        self.conn = sqlite3.connect(db_name)
         self.cur = self.conn.cursor()
         self.cur.execute("""
             CREATE TABLE IF NOT EXISTS graph_batches (
@@ -24,7 +23,7 @@ class DB:
         self.cur.execute("INSERT INTO graph_batches (path_id, payload) VALUES (?, ?)", (path_id, blob))
         self.conn.commit()
 
-    def get_all_filenames_from_db(self):
+    def get_all_filenames(self):
         self.cur.execute("SELECT path_id FROM graph_batches")
         names_tuples = self.cur.fetchall()
 

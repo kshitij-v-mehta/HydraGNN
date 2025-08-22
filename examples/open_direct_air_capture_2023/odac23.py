@@ -148,7 +148,7 @@ class ODAC2023(AbstractBaseDataset):
                 # Distribute unprocesses ext files amongst MPI ranks
                 # Batch files into sets of w files so that they can be spread amongst processes on a node
                 extfiles = self.get_unprocessed_extfiles(dirpath, data_type)
-                w = os.cpu_count() - 1
+                w = os.cpu_count()
                 batches = [extfiles[i:i+w] for i in range(0, len(extfiles), w)]
 
                 with MPICommExecutor() as executor:
@@ -165,23 +165,24 @@ class ODAC2023(AbstractBaseDataset):
 
     def node_root(self, extfilelist):
         """
+        Second-level MPI parallelization.
         MPI rank on each node runs this function.
         It takes in a list of ext files and spawns processes locally to process them in parallel.
         """
         with Manager() as m:
-            dbm = DB(self.rank)
             q = m.Queue()
-            p = Process(target=self.db_writer, args=(q, dbm))
+            p = Process(target=self.db_writer, args=(q,))
             p.start()
 
-            with ProcessPoolExecutor() as executor:
+            with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
                 list(executor.map(self.worker, extfilelist, [q] * len(extfilelist), chunksize=1))
 
             q.put(("_", "DONE"))
             p.join()
-            print(f"Rank {self.rank} done processing {len(extfilelist)} ext files.", flush=True)
+            print(f"Rank {self.rank} done processing {len(extfilelist)} ext files", flush=True)
 
-    def db_writer(self, q, dbm: DB):
+    def db_writer(self, q):
+        dbm = DB(f"odac23_{self.rank}.db")
         while True:
             path_id, blob = q.get()
             if blob == "DONE":
@@ -220,29 +221,27 @@ class ODAC2023(AbstractBaseDataset):
         q.put((path_id, blob))
         self.dataset = []
 
-
     def get_unprocessed_extfiles(self, dirpath, data_type):
-        pass
-
-
-    def _get_datasets_assigned_to_me(self, dirpath, data_type, dbm):
-        total_file_list = None
+        """
+        Get a list of ext files that have not been processed.
+        """
+        unprocessed_files = []
         if self.rank == 0:
-            total_file_list = glob.glob(
-                os.path.join(dirpath, data_type, "**/*.extxyz"), recursive=True
-            )
-            print(f"Root sees {len(total_file_list)} *.extxyz files", flush=True)
-            # total_file_list = total_file_list[:200]
+            allextfiles = glob.glob(os.path.join(dirpath, data_type, "**/*.extxyz"))
+            print(f"{len(allextfiles)} ext files found at {os.path.join(dirpath, data_type)}")
+            db_files = glob.glob("odac23_*.db")
+            print(f"Found {len(db_files)} db files")
 
-            files_done = dbm.get_all_filenames_from_db()
-            total_file_list = set(total_file_list) - set(files_done)
+            extfiles_done = list()
+            for dbfile in db_files:
+                dbm = DB(dbfile)
+                extfiles_done.extend(dbm.get_all_filenames())
 
-        total_file_list = self.comm.bcast(total_file_list, root=0)
+            extfiles_done = [os.path.join(dirpath, fname) for fname in extfiles_done]
+            unprocessed_files = set(allextfiles) - set(extfiles_done)
+            print(f"{len(unprocessed_files)} ext files to be processed", flush=True)
 
-        # evenly distribute amongst all ranks
-        rx = list(nsplit(total_file_list, self.world_size))[self.rank]
-        datasets = rx
-        return datasets
+        return unprocessed_files
 
     def _create_pytorch_data_object(self, dataset, index):
         try:
