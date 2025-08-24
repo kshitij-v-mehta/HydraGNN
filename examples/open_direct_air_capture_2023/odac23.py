@@ -43,34 +43,6 @@ from typing import List
 from hydragnn.utils.print.print_utils import iterate_tqdm, log
 
 
-def async_fileio(q, dataset_list):
-    try:
-        for dataset_dict in dataset_list:
-            fullpath = dataset_dict["dataset_fullpath"]
-            filename = os.path.basename(fullpath)
-            splitdir = os.path.basename(os.path.dirname(fullpath))
-            trainorval = os.path.basename(os.path.dirname(os.path.dirname(fullpath)))
-            tmpsplit = os.path.join("/tmp",trainorval,splitdir)
-            tmppath = os.path.join(tmpsplit,filename)
-            
-            os.makedirs(os.path.join("/tmp", trainorval), exist_ok=True)
-            os.makedirs(tmpsplit, exist_ok=True)
-
-            if not os.path.isfile(tmppath):
-                shutil.copy(fullpath,tmppath)
-                # print(f"created {tmppath} from {fullpath}")
-            # else:
-                # print(f"found existing {tmppath}")
-
-            q.put(tmppath)
-        q.put(None)
-        print(f"Put None in queue")
-    except Exception as e:
-        print(e)
-        print(traceback.format_exc())
-        MPI.COMM_WORLD.Abort(1)
-
-
 class ExtendedXYZDataset(Dataset):
     def __init__(self, extxyz_filename: str, transform=None, pre_transform=None):
         """
