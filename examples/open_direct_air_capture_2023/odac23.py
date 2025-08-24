@@ -1,10 +1,12 @@
 import os, random, torch, glob, sys, pickle, shutil, traceback, pdb
+from pickle import HIGHEST_PROTOCOL
+
 import numpy as np
 from joblib.externals.loky import ProcessPoolExecutor
 from mpi4py import MPI
 from mpi4py.futures import MPICommExecutor
 from yaml import full_load
-from datetime import datetime
+import time
 import threading, queue
 from sqlite_helper import DB
 
@@ -142,17 +144,18 @@ class ODAC2023(AbstractBaseDataset):
             self.comm = comm
 
             if stage_db:
-                # Stage pyg objects to db and return
+                # Write pyg objects to db and return
 
                 # First level MPI parallelization
                 # Distribute unprocesses ext files amongst MPI ranks
                 # Batch files into sets of w files so that they can be spread amongst processes on a node
                 extfiles = self.get_unprocessed_extfiles(dirpath, data_type)
                 w = os.cpu_count()
-                batches = [extfiles[i:i+w] for i in range(0, len(extfiles), w)]
+                # batches = [extfiles[i:i+w] for i in range(0, len(extfiles), w)]
 
                 with MPICommExecutor() as executor:
-                    list(executor.map(self.node_root, batches, chunksize=1))
+                    list(executor.map(self.node_root, extfiles, [dirpath]*len(extfiles),
+                                      [data_type]*len(extfiles), chunksize=1))
 
             else:
                 # Read pyg objects from db
@@ -163,62 +166,84 @@ class ODAC2023(AbstractBaseDataset):
             print(traceback.format_exc())
             MPI.COMM_WORLD.Abort(1)
 
-    def node_root(self, extfilelist):
+    def node_root(self, extfile, dirpath, data_type):
         """
         Second-level MPI parallelization.
         MPI rank on each node runs this function.
-        It takes in a list of ext files and spawns processes locally to process them in parallel.
+        It takes in an ext file and spawns processes locally to process samples in the file in parallel.
         """
         with Manager() as m:
+            path_id = extfile.removeprefix(dirpath).lstrip("/")
             q = m.Queue()
             p = Process(target=self.db_writer, args=(q,))
             p.start()
 
-            with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
-                list(executor.map(self.worker, extfilelist, [q] * len(extfilelist), chunksize=1))
+            q.put(path_id)
+            print(f"Rank {self.rank} starting {path_id}")
 
-            q.put(("_", "DONE"))
+            t1 = time.time()
+            try:
+                dataset = ExtendedXYZDataset(extxyz_filename=extfile)
+            except ValueError as e:
+                print(f"{extfile} not a valid ase lmdb dataset. Ignoring ...")
+            except Exception as e:
+                print(e)
+                print(traceback.format_exc())
+
+            if data_type == "train":
+                rx = list(range(len(dataset)))
+            else:
+                rx = list(nsplit(list(range(len(dataset))), self.world_size))[self.rank]
+
+            print(f"Rank: {self.rank}, dataname: {dataset}, data_type: {data_type}, "
+                  f"num_samples: {len(dataset)}, len(rx): {len(rx)}")
+
+            max_workers = os.cpu_count()
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                list(executor.map(self.worker, rx, [dataset]*len(rx), [q]*len(rx), chunksize=3))
+
+            q.put("DONE")
             p.join()
-            print(f"Rank {self.rank} done processing {len(extfilelist)} ext files", flush=True)
+            t2 = time.time()
+            print(f"Rank {self.rank} done processing {extfile} in {round(t2-t1,2)} seconds", flush=True)
 
     def db_writer(self, q):
+        """
+        DB writer process that gets pyg samples from the queue until DONE is sent.
+        It then writes the full list of samples as a blob to the DB with the path_id
+        (e.g. /train/split_00399/04866.extxyz) as the key
+        """
         dbm = DB(f"odac23_{self.rank}.db")
+        pyg_samples = list()
+
+        # path to the extxyz file is sent first and must be used as the primary key in the db
+        path_id = q.get()
+
+        # keep getting pyg samples from workers
         while True:
-            path_id, blob = q.get()
+            blob = q.get()
             if blob == "DONE":
                 break
-            dbm.write(path_id, blob)
+            pyg_obj = pickle.loads(blob)
+            pyg_samples.extend(pyg_obj)
 
-    def worker(self, task: tuple, q):
+        # all samples have been sent. serialize them and add the blob to the db
+        blob = pickle.dumps(pyg_samples, protocol=HIGHEST_PROTOCOL)
+        dbm.write(path_id, blob)
+        print(f"db_writer for rank {self.rank} wrote {path_id} to db.")
+
+    def worker(self, index, dataset, q):
         """
-        Process that will process an extxyz file and create PyG samples from it.
-        It then serializes the samples and adds them to the queue.
+        Process that will create a PyG object from a sample from an extxyz dataset.
+        It then serializes the sample and adds it to the queue for the db_writer process to retrieve.
         """
-        self.dataset = []
-        datadir, data_type, extfile = task
-        try:
-            dataset = ExtendedXYZDataset(extxyz_filename=extfile)
-        except ValueError as e:
-            print(f"{extfile} not a valid ase lmdb dataset. Ignoring ...")
-        except Exception as e:
-            print(e)
-            print(traceback.format_exc())
-
-        if data_type == "train":
-            rx = list(range(len(dataset)))
-        else:
-            rx = list(nsplit(list(range(len(dataset))), self.world_size))[self.rank]
-
-        print(f"Rank: {self.rank}, dataname: {dataset}, data_type: {data_type}, "
-              f"num_samples: {len(dataset)}, len(rx): {len(rx)}")
-
-        for index in iterate_tqdm(rx, verbosity_level=2, desc="pytorch data object creation"):
-            self._create_pytorch_data_object(dataset, index)
+        self._create_pytorch_data_object(dataset, index)
 
         # Serialize the list of samples into a blob to be written to the db
         blob = pickle.dumps(self.dataset, protocol=pickle.HIGHEST_PROTOCOL)
-        path_id = extfile.removeprefix(datadir)
-        q.put((path_id, blob))
+        q.put(blob)
+
+        # create_pytorch_data_object adds sample to self.dataset. Dont remove it, but lets not keep objects in memory.
         self.dataset = []
 
     def get_unprocessed_extfiles(self, dirpath, data_type):
@@ -238,7 +263,7 @@ class ODAC2023(AbstractBaseDataset):
                 extfiles_done.extend(dbm.get_all_filenames())
 
             extfiles_done = [os.path.join(dirpath, fname) for fname in extfiles_done]
-            unprocessed_files = set(allextfiles) - set(extfiles_done)
+            unprocessed_files = list(set(allextfiles) - set(extfiles_done))
             print(f"{len(unprocessed_files)} ext files to be processed", flush=True)
 
         return unprocessed_files
