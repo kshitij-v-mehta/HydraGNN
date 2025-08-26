@@ -188,14 +188,13 @@ class ODAC2023(AbstractBaseDataset):
         #     verbosity_level=2,
         #     desc=f"Rank{self.rank} Dataset {index}/{len(rx)}",
         # ):
-        for index in tqdm.tqdm(rx):
+        for index in rx:
             self._create_pytorch_data_object(dataset, index)
         
-        self.dataset = []
-
         torch.save(self.dataset, tmp_pyg_fname)
         os.rename(tmp_pyg_fname, f"{tmp_pyg_fname}-DONE")
         t2 = time.time()
+        self.dataset = []
         print(f"Rank {self.rank} done processing {extfile} in {round(t2-t1,2)} seconds", flush=True)
 
     def get_unprocessed_extfiles(self, dirpath, data_type):

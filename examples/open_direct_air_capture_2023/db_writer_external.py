@@ -1,4 +1,4 @@
-import glob, time, pickle
+import os, glob, time, pickle
 import os.path
 
 from mpi4py import MPI
@@ -11,19 +11,22 @@ def main():
     print(f"Rank {rank} of the external db writer here")
     db = DB(f"odac23_{rank}.db")
 
+    wait_count = 0
     while True:
         mdfiles = glob.glob("/tmp/*DONE")
         for fname in mdfiles:
-            if 'ALL' not in fname:
-                print(f"external db writer found new file {fname}")
-                data = torch.load(fname)
-                blob = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
-                path_id = os.path.basename(fname).split('.pt-DONE')[0].replace('-','/')
-                db.write(path_id, blob)
-                os.remove(fname)
-                print(f"external db writer successfully wrote {fname} info to db")
+            print(f"external db writer found new file {fname}")
+            os.rename(fname, fname.replace('-DONE',''))
+            data = torch.load(fname, weights_only=False)
+            blob = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
+            path_id = os.path.basename(fname).split('.pt')[0].split('.pt')[0].replace('-','/')
+            db.write(path_id, blob)
+            os.remove(fname)
+            print(f"external db writer successfully wrote {fname} info to db")
 
-            if fname == 'ALL-DONE' and len(mdfiles) == 1:
+        if os.path.exists('ALL-DONE'):
+            wait_count += 1
+            if wait_count == 3:
                 print("external db writer sees all files are done. quitting.", flush=True)
                 break
 
