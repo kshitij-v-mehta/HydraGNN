@@ -142,7 +142,7 @@ class ODAC2023(AbstractBaseDataset):
                 else:
                     # worker process
                     while True:
-                        self.comm.send(self.rank, dest=0, tag=0)
+                        self.comm.send(self.rank, dest=0, tag=self.rank)
                         extfile = self.comm.recv(source=0, tag=self.rank)
                         if extfile == "DONE":
                             break
@@ -205,7 +205,7 @@ class ODAC2023(AbstractBaseDataset):
         if self.rank == 0:
             allextfiles = glob.glob(os.path.join(dirpath, data_type, "**/*.extxyz"))
             print(f"{len(allextfiles)} ext files found at {os.path.join(dirpath, data_type)}")
-            db_files = glob.glob("odac23_*.db")
+            db_files = glob.glob("./db/odac23_*.db")
             print(f"Found {len(db_files)} db files")
 
             extfiles_done = list()
