@@ -124,6 +124,7 @@ class ODAC2023(AbstractBaseDataset):
                 # Batch files into sets of w files so that they can be spread amongst processes on a node
                 extfiles = self.get_unprocessed_extfiles(dirpath, data_type)
 
+                # Write to db if there are unprocessed files
                 if self.rank == 0:
                     status = MPI.Status()
 
@@ -148,9 +149,8 @@ class ODAC2023(AbstractBaseDataset):
                             break
                         self.process_file(extfile, dirpath, data_type)
 
-            else:
-                # Read pyg objects from db
-                pass
+                # Read from db and create adios output
+                self.read_pyg_from_db(data_type)
 
         except Exception as e:
             print(e)
@@ -218,6 +218,20 @@ class ODAC2023(AbstractBaseDataset):
             print(f"{len(unprocessed_files)} ext files to be processed", flush=True)
 
         return unprocessed_files
+
+    def read_pyg_from_db(self, data_type):
+        dbpath = f"./db/odac23_{self.rank}.db"
+        assert os.path.exists(dbpath)
+
+        db = DB(dbpath)
+        blobs = db.get_all(data_type)
+        print(f"Rank {self.rank} read {len(blobs)} extxyz files from db")
+
+        self.dataset = []
+        for blob in blobs:
+            graph_list = pickle.loads(blob)
+            self.dataset.extend(graph_list)
+        print(f"Rank {self.rank} re-populated {len(self.dataset)} samples from the db")
 
     def _create_pytorch_data_object(self, dataset, index):
         try:
