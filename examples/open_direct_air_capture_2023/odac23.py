@@ -175,11 +175,8 @@ class ODAC2023(AbstractBaseDataset):
             print(e)
             print(traceback.format_exc())
 
-        if data_type == "train":
-            rx = list(range(len(dataset)))
-        else:
-            rx = list(nsplit(list(range(len(dataset))), self.world_size))[self.rank]
 
+        rx = list(range(len(dataset)))
         print(f"Rank: {self.rank}, dataname: {extfile}, data_type: {data_type}, "
               f"num_samples: {len(dataset)}, len(rx): {len(rx)}", flush=True)
 
