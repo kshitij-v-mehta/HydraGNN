@@ -117,40 +117,49 @@ class ODAC2023(AbstractBaseDataset):
             self.comm = comm
 
             if stage_db:
+
                 # Write pyg objects to db and return
 
                 # First level MPI parallelization
                 # Distribute unprocesses ext files amongst MPI ranks
                 # Batch files into sets of w files so that they can be spread amongst processes on a node
                 extfiles = self.get_unprocessed_extfiles(dirpath, data_type)
-
-                # Write to db if there are unprocessed files
+                read_from_db = False
                 if self.rank == 0:
-                    status = MPI.Status()
+                    if len(extfiles) == 0:
+                        read_from_db = True
+                        print(f"No ext files for {data_type} remaining. Will read from db.")
+                read_from_db = self.comm.bcast(read_from_db, root=0)
 
-                    # dynamically assign a file to a worker process
-                    while len(extfiles) > 0:
-                        self.comm.recv(source=MPI.ANY_SOURCE, status=status)
-                        worker = status.Get_source()
-                        self.comm.send(extfiles.pop(), dest=worker, tag=worker)
+                if not read_from_db:
+                    # Write to db if there are unprocessed files
+                    if self.rank == 0:
+                        status = MPI.Status()
 
-                    # send terminate to workers as all files have been processed
-                    for _ in range(1, self.world_size):
-                        self.comm.recv(source=MPI.ANY_SOURCE, status=status)
-                        worker = status.Get_source()
-                        self.comm.send("DONE", dest=worker, tag=worker)
+                        # dynamically assign a file to a worker process
+                        while len(extfiles) > 0:
+                            self.comm.recv(source=MPI.ANY_SOURCE, status=status)
+                            worker = status.Get_source()
+                            self.comm.send(extfiles.pop(), dest=worker, tag=worker)
 
-                else:
-                    # worker process
-                    while True:
-                        self.comm.send(self.rank, dest=0, tag=self.rank)
-                        extfile = self.comm.recv(source=0, tag=self.rank)
-                        if extfile == "DONE":
-                            break
-                        self.process_file(extfile, dirpath, data_type)
+                        # send terminate to workers as all files have been processed
+                        for _ in range(1, self.world_size):
+                            self.comm.recv(source=MPI.ANY_SOURCE, status=status)
+                            worker = status.Get_source()
+                            self.comm.send("DONE", dest=worker, tag=worker)
 
-                # Read from db and create adios output
-                self.read_pyg_from_db(data_type)
+                    else:
+                        # worker process
+                        while True:
+                            self.comm.send(self.rank, dest=0, tag=self.rank)
+                            extfile = self.comm.recv(source=0, tag=self.rank)
+                            if extfile == "DONE":
+                                break
+                            self.process_file(extfile, dirpath, data_type)
+
+                else: # if read_from_db == True:
+                    # Read from db and create adios output
+                    self.read_pyg_from_db(data_type)
 
         except Exception as e:
             print(e)
@@ -218,7 +227,7 @@ class ODAC2023(AbstractBaseDataset):
 
     def read_pyg_from_db(self, data_type):
         dbpath = f"./db/odac23_{self.rank}.db"
-        assert os.path.exists(dbpath)
+        assert os.path.exists(dbpath), f"{dbpath} does not exist"
 
         db = DB(dbpath)
         blobs = db.get_all(data_type)

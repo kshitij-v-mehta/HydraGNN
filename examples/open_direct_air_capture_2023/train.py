@@ -172,7 +172,7 @@ if __name__ == "__main__":
             graphgps_transform=None,
             energy_per_atom=args.energy_per_atom,
             dist=True,
-            stage_db=args.stagedb
+            stage_db=True
         )
         ## This is a local split
         trainset, valset1, valset2 = split_dataset(
@@ -189,12 +189,14 @@ if __name__ == "__main__":
             graphgps_transform=None,
             energy_per_atom=args.energy_per_atom,
             dist=True,
+            stage_db=True
         )
         ## Need as a list
         testset = testset[:]
         print(rank, "Local splitting: ", len(trainset), len(valset), len(testset))
 
         comm.Barrier()
+        sys.exit(0)
 
         deg = gather_deg(trainset)
         config["pna_deg"] = deg
@@ -249,6 +251,7 @@ if __name__ == "__main__":
                 # minmax_graph_feature=total.minmax_graph_feature,
                 use_subdir=True,
             )
+        comm.Barrier()
         sys.exit(0)
 
     tr.initialize()
