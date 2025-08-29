@@ -20,7 +20,7 @@ class DB:
         self.conn.commit()
 
     def write(self, path_id, blob):
-        self.cur.execute("INSERT INTO graph_batches (path_id, payload) VALUES (?, ?)", (path_id, blob))
+        self.cur.execute("INSERT or REPLACE INTO graph_batches (path_id, payload) VALUES (?, ?)", (path_id, blob))
         self.conn.commit()
 
     def get_all_filenames(self):
