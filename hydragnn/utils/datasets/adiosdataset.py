@@ -112,6 +112,7 @@ class AdiosWriter:
         self.attributes = dict()
         self.adios = ad2.ADIOS()
         self.io = self.adios.DeclareIO(self.filename)
+        self.io.Parameters()['StatsLevel'] = 'Off'
 
     def add_global(self, vname, arr):
         """
