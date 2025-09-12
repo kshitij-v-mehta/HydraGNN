@@ -84,8 +84,9 @@ def main():
         config = json.load(f)
 
     # Apply graph gps transform to every graph in the list
-    # for g in graph_list:
-    #     graphgps_transform(g, config)
+    for set_type in (trainset, valset, testset):
+        for graph in set_type:
+            graphgps_transform(graph, config)
 
     # Write data back to ADIOS file.
     write_adios(sys.argv[3], trainset, valset, testset)
