@@ -11,7 +11,7 @@ class ChemicalFeatureEncoder:
     def __init__(self, num_elements: int = 118):
         warnings.filterwarnings("ignore")
         self.block_map = {"s": 0, "p": 1, "d": 2, "f": 3}
-        print("Generating element properties for chemical encoder ...")
+        # print("Generating element properties for chemical encoder ...")
         self.mel_props = {}
         for z in tqdm(range(1, num_elements + 1)):
             self.mel_props[z] = mendeleev_element(z)

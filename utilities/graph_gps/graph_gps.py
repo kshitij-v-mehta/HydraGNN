@@ -1,10 +1,10 @@
-import pdb
 import sys, json
+import time
+
 import torch
 from mpi4py import MPI
 from torch_geometric.transforms import AddLaplacianEigenvectorPE
 
-from hydragnn.preprocess.graph_samples_checks_and_updates import gather_deg
 from hydragnn.utils.descriptors_and_embeddings.chemicaldescriptors import (
     ChemicalFeatureEncoder,
 )
@@ -58,6 +58,7 @@ def read_adios(filename):
     # )
 
     return trainset, valset, testset
+    # return train_loader, val_loader, test_loader
 
 
 def write_adios(filename, trainset, valset, testset):
@@ -75,8 +76,18 @@ def write_adios(filename, trainset, valset, testset):
 
 def main():
     assert len(sys.argv) == 4, f"Run as {sys.argv[0]} <config file> <input adios file> <output adios file>"
+
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+
     # Read data from ADIOS file
+    if rank == 0:
+        print(f"Reading ADIOS file {sys.argv[2]}")
+        t1 = time.time()
     trainset, valset, testset = read_adios(sys.argv[2])
+    if rank == 0:
+        t2 = time.time()
+        print(f"Read ADIOS file successfully in {round(t2-t1,2)} seconds")
 
     # Load config json
     jsonfile = sys.argv[1]
@@ -84,12 +95,27 @@ def main():
         config = json.load(f)
 
     # Apply graph gps transform to every graph in the list
+    if rank == 0:
+        print(f"Applying graph transforms")
+        t1 = time.time()
     for set_type in (trainset, valset, testset):
+        if rank == 0: print(f"Starting with {set_type.label}")
         for graph in set_type:
             graphgps_transform(graph, config)
 
+    comm.Barrier()
+    if rank == 0:
+        t2 = time.time()
+        print(f"Finished applying graph transforms in {round(t2-t1,2)} seconds. Now writing data to {sys.argv[3]}")
+        t1 = time.time()
+
     # Write data back to ADIOS file.
     write_adios(sys.argv[3], trainset, valset, testset)
+    if rank == 0:
+        t2 = time.time()
+        print(f"Wrote new ADIOS file successfully in {round(t2-t1,2)} seconds")
+
+    if rank == 0: print('All done. Goodbye.')
 
 
 if __name__ == "__main__":
