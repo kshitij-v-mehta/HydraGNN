@@ -1,3 +1,5 @@
+import argparse
+import os
 import sys, json
 import time
 
@@ -14,6 +16,8 @@ from hydragnn.utils.descriptors_and_embeddings.topologicaldescriptors import (
 
 import hydragnn
 from hydragnn.utils.datasets import AdiosDataset, AdiosWriter
+from utilities.graph_gps.db import DB
+from utilities.graph_gps.arg_parser import read_args
 
 
 def graphgps_transform(data, config):
@@ -75,24 +79,38 @@ def write_adios(filename, trainset, valset, testset):
 
 
 def main():
-    assert len(sys.argv) == 4, f"Run as {sys.argv[0]} <config file> <input adios file> <output adios file>"
-
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
 
+    # parse input arguments
+    args = read_args()
+    json_config = args.json_config
+    adios_in = args.adios_in
+    adios_out = args.adios_out
+    use_intermediate_db = args.use_intermediate_db
+    db_path = args.db_path
+
+    db = None
+    graphs_done = []
+    if use_intermediate_db:
+        if rank == 0:
+            if not os.path.exists(db_path):
+                os.makedirs(db_path)
+        db = DB(db_path)
+        graphs_done = db.get_all()
+
+    # Load config json
+    with open(json_config, "r") as f:
+        config = json.load(f)
+
     # Read data from ADIOS file
     if rank == 0:
-        print(f"Reading ADIOS file {sys.argv[2]}")
+        print(f"Reading ADIOS file {adios_in}")
         t1 = time.time()
-    trainset, valset, testset = read_adios(sys.argv[2])
+    trainset, valset, testset = read_adios(adios_in)
     if rank == 0:
         t2 = time.time()
         print(f"Read ADIOS file successfully in {round(t2-t1,2)} seconds")
-
-    # Load config json
-    jsonfile = sys.argv[1]
-    with open(jsonfile, "r") as f:
-        config = json.load(f)
 
     # Apply graph gps transform to every graph in the list
     if rank == 0:
@@ -103,14 +121,17 @@ def main():
         for graph in set_type:
             graphgps_transform(graph, config)
 
+            if use_intermediate_db:
+                db.write(graph)
+
     comm.Barrier()
     if rank == 0:
         t2 = time.time()
-        print(f"Finished applying graph transforms in {round(t2-t1,2)} seconds. Now writing data to {sys.argv[3]}")
+        print(f"Finished applying graph transforms in {round(t2-t1,2)} seconds. Now writing data to {adios_out}")
         t1 = time.time()
 
     # Write data back to ADIOS file.
-    write_adios(sys.argv[3], trainset, valset, testset)
+    write_adios(adios_out, trainset, valset, testset)
     if rank == 0:
         t2 = time.time()
         print(f"Wrote new ADIOS file successfully in {round(t2-t1,2)} seconds")
