@@ -8,9 +8,11 @@ import torch
 
 
 class DB:
-    def __init__(self, db_name):
+    def __init__(self, db_name, cache_size: int = 10):
         self.conn = None
         self.cur = None
+        self.cache = []
+        self.cache_size = cache_size
 
         self.set_type_codes = {'trainset': 0, 'valset': 1, 'testset': 2}
 
@@ -18,6 +20,8 @@ class DB:
 
     def create_sqlite(self, db_name):
         self.conn = sqlite3.connect(db_name)
+        # self.conn.execute("PRAGMA journal_mode=WAL;")
+        # self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.cur = self.conn.cursor()
         self.cur.execute("""
                          CREATE TABLE IF NOT EXISTS graph_data (
@@ -29,10 +33,18 @@ class DB:
 
     def add(self, set_type, blob):
         type_code = self.set_type_codes[set_type]
-        self.cur.execute("INSERT or REPLACE INTO graph_data (set_type, original_pyg) VALUES (?, ?)",
-                         (type_code, blob))
-        self.conn.commit()
+
+        self.cache.append((type_code, sqlite3.Binary(blob)))
+        if len(self.cache) > self.cache_size:
+            self._flush_cache()
+
+    def _flush_cache(self):
+        if len(self.cache) > 0:
+            self.cur.executemany("INSERT or REPLACE INTO graph_data (set_type, original_pyg) VALUES (?, ?)", self.cache)
+            self.conn.commit()
+            self.cache = []
 
     def __del__(self):
+        self._flush_cache()
         self.conn.commit()
         self.conn.close()
