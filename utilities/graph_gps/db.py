@@ -21,10 +21,10 @@ class DB:
         self.cur = self.conn.cursor()
         self.cur.execute("""
                          CREATE TABLE IF NOT EXISTS graph_data (
-                         id INTEGER primary key AUTO INCREMENT,
+                         id INTEGER primary key AUTOINCREMENT,
                          set_type INTEGER NOT NULL,
                          original_pyg BLOB NOT NULL,
-                         transformed_pyg BLOB,)""")
+                         transformed_pyg BLOB)""")
         self.conn.commit()
 
     def add(self, set_type, blob):
@@ -36,4 +36,3 @@ class DB:
     def __del__(self):
         self.conn.commit()
         self.conn.close()
-        self.cur.close()
