@@ -44,7 +44,7 @@ class DB:
             self.conn.commit()
             self.cache = []
 
-    def __del__(self):
+    def close(self):
         self._flush_cache()
         self.conn.commit()
         self.conn.close()

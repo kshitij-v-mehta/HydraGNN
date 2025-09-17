@@ -74,6 +74,7 @@ def main():
         t1 = time.time()
         print(f"Now writing objects to db")
     write_to_db((trainset, valset, testset), db)
+    db.close()
 
     if rank == 0:
         t2 = time.time()
