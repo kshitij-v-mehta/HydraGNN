@@ -2,6 +2,7 @@ import json
 import os.path
 import pickle
 import sys
+import time
 
 from mpi4py import MPI
 
@@ -60,8 +61,25 @@ def main():
 
     adios_in, db_dir_path = parse_input_args()
     db = open_db_connection(adios_in, db_dir_path, rank)
+
+    if rank == 0: 
+        print(f"Reading adios data")
+        t1 = time.time()
     trainset, valset, testset = read_adios_data(adios_in, rank, nproc, comm)
+
+    if rank == 0:
+        t2 = time.time()
+        print(f"Read adios data in {round(t2-t1,0)} seconds.")
+
+        t1 = time.time()
+        print(f"Now writing objects to db")
     write_to_db((trainset, valset, testset), db)
+
+    if rank == 0:
+        t2 = time.time()
+        print(f"Done writing to db in {round(t2-t1,0)} seconds.")
+
+    if rank == 0: print("All done. Goodbye.")
 
 
 if __name__ == '__main__':
