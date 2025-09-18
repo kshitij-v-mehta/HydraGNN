@@ -79,6 +79,7 @@ if __name__ == "__main__":
 
         rowid, set_type, pyg_blob, _pyg_transformed = row_data
         pyg = pickle.loads(pyg_blob)
+        print(f"Rank {rank} applying transform on row id {rowid}")
         pyg_transformed = graphgps_transform(pyg, config)
         pyg_transformed_blob = pickle.dumps(pyg_transformed)
         db.update_pyg_transformed(rowid, pyg_transformed_blob)
