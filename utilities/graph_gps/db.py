@@ -8,21 +8,49 @@ import torch
 
 
 class DB:
-    def __init__(self, db_name, cache_size: int = 10):
+    def __init__(self, db_name, cache_size: int = 1000):
+        self.db_name = db_name
         self.conn = None
         self.cur = None
-        self.cache = []
+
+        # Separate cursors to read and udpate the table
+        self.read_cursor = None
+        self.update_cursor = None
+
+        # A write cache used during creation and initial population of the db
+        self.create_cache = []
         self.cache_size = cache_size
+
+        # A cache to hold rows while reading data in
+        self.read_cache = []
+        self.read_cache_size = 1000
+
+        # Count of how many transactions are run before commit must be called
+        self.pending_commits = 0
+        self.commit_cache_size = 1000
 
         self.set_type_codes = {'trainset': 0, 'valset': 1, 'testset': 2}
 
-        self.create_sqlite(db_name)
+        self._connect()
 
-    def create_sqlite(self, db_name):
-        self.conn = sqlite3.connect(db_name)
-        # self.conn.execute("PRAGMA journal_mode=WAL;")
-        # self.conn.execute("PRAGMA synchronous=NORMAL;")
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if not self.read_cache:
+            self.read_cursor.execute('SELECT * FROM graph_data')
+            self.read_cache = self.read_cursor.fetchmany(self.read_cache_size)
+            if not self.read_cache:
+                raise StopIteration
+        return self.read_cache.pop(0)
+
+    def _connect(self):
+        self.conn = sqlite3.connect(self.db_name)
         self.cur = self.conn.cursor()
+        self.read_cursor = self.conn.cursor()
+        self.update_cursor = self.conn.cursor()
+
+    def create_tables(self):
         self.cur.execute("""
                          CREATE TABLE IF NOT EXISTS graph_data (
                          id INTEGER primary key AUTOINCREMENT,
@@ -34,17 +62,26 @@ class DB:
     def add(self, set_type, blob):
         type_code = self.set_type_codes[set_type]
 
-        self.cache.append((type_code, sqlite3.Binary(blob)))
-        if len(self.cache) > self.cache_size:
-            self._flush_cache()
+        self.create_cache.append((type_code, sqlite3.Binary(blob)))
+        if len(self.create_cache) > self.cache_size:
+            self._flush_caches()
 
-    def _flush_cache(self):
-        if len(self.cache) > 0:
-            self.cur.executemany("INSERT or REPLACE INTO graph_data (set_type, original_pyg) VALUES (?, ?)", self.cache)
-            self.conn.commit()
-            self.cache = []
+    def _flush_caches(self):
+        if len(self.create_cache) > 0:
+            self.cur.executemany("INSERT or REPLACE INTO graph_data (set_type, original_pyg) VALUES (?, ?)",
+                                 self.create_cache)
+        self.conn.commit()
+        self.create_cache = []
 
     def close(self):
-        self._flush_cache()
-        self.conn.commit()
+        self._flush_caches()
         self.conn.close()
+
+    def update_pyg_transformed(self, rowid, pyg_transformed):
+        self.update_cursor.execute("UPDATE graph_data set transformed_pyg = ? where rowid = ?",
+                                   (sqlite3.Binary(pyg_transformed), rowid))
+        self.pending_commits += 1
+
+        if self.pending_commits > self.commit_cache_size:
+            self.conn.commit()
+            self.pending_commits = 0

@@ -27,7 +27,9 @@ def parse_input_args():
 def open_db_connection(adios_in, db_dir_path, rank):
     dataset_name = os.path.basename(os.path.splitext(os.path.abspath(adios_in))[0])
     my_db_path = os.path.join(os.path.abspath(db_dir_path), f"{dataset_name}_{rank}.db")
-    return DB(my_db_path)
+    db = DB(my_db_path)
+    db.create_tables()
+    return db
 
 
 def read_adios_data(adios_in, rank, nproc, comm=MPI.COMM_WORLD):
