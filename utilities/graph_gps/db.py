@@ -27,7 +27,7 @@ class DB:
 
         # Count of how many transactions are run before commit must be called
         self.pending_commits = 0
-        self.commit_cache_size = 1000
+        self.max_pending_commits = 1
 
         self.set_type_codes = {'trainset': 0, 'valset': 1, 'testset': 2}
 
@@ -82,6 +82,6 @@ class DB:
                                    (sqlite3.Binary(pyg_transformed), rowid))
         self.pending_commits += 1
 
-        if self.pending_commits > self.commit_cache_size:
+        if self.pending_commits >= self.max_pending_commits:
             self.conn.commit()
             self.pending_commits = 0
