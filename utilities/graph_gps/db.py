@@ -33,17 +33,6 @@ class DB:
 
         self._connect()
 
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        if not self.read_cache:
-            self.read_cursor.execute('SELECT * FROM graph_data')
-            self.read_cache = self.read_cursor.fetchmany(self.read_cache_size)
-            if not self.read_cache:
-                raise StopIteration
-        return self.read_cache.pop(0)
-
     def _connect(self):
         self.conn = sqlite3.connect(self.db_name)
         self.cur = self.conn.cursor()
@@ -66,6 +55,23 @@ class DB:
         if len(self.create_cache) > self.cache_size:
             self._flush_caches()
 
+    def get_unprocessed(self):
+        if not self.read_cache:
+            self.read_cursor.execute('SELECT * FROM graph_data where transformed_pyg is NULL')
+            self.read_cache = self.read_cursor.fetchmany(self.read_cache_size)
+            if not self.read_cache:
+                return None
+        return self.read_cache.pop(0)
+
+    def update_pyg_transformed(self, rowid, pyg_transformed):
+        self.update_cursor.execute("UPDATE graph_data set transformed_pyg = ? where rowid = ?",
+                                   (sqlite3.Binary(pyg_transformed), rowid))
+        self.pending_commits += 1
+
+        if self.pending_commits >= self.max_pending_commits:
+            self.conn.commit()
+            self.pending_commits = 0
+
     def _flush_caches(self):
         if len(self.create_cache) > 0:
             self.cur.executemany("INSERT or REPLACE INTO graph_data (set_type, original_pyg) VALUES (?, ?)",
@@ -76,12 +82,3 @@ class DB:
     def close(self):
         self._flush_caches()
         self.conn.close()
-
-    def update_pyg_transformed(self, rowid, pyg_transformed):
-        self.update_cursor.execute("UPDATE graph_data set transformed_pyg = ? where rowid = ?",
-                                   (sqlite3.Binary(pyg_transformed), rowid))
-        self.pending_commits += 1
-
-        if self.pending_commits >= self.max_pending_commits:
-            self.conn.commit()
-            self.pending_commits = 0

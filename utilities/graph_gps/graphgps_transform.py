@@ -1,4 +1,3 @@
-import argparse
 import glob
 import json
 import os
@@ -66,20 +65,26 @@ if __name__ == "__main__":
     # Open connection to db
     if rank == 0:
         dbfiles = glob.glob(os.path.join(db_dir_path, "*.db"))
-        # assert len(dbfiles) == size, f"Run this with {len(dbfiles)} MPI ranks."
+        assert len(dbfiles) == size, f"Run this with {len(dbfiles)} MPI ranks."
 
     mydbfile = os.path.join(db_dir_path, dataset_name + f"_{rank}.db")
     db = DB(mydbfile)
 
     # Process all pyg objects
     if rank == 0: t1 = time.time()
-    for rowid, set_type, pyg_blob, _pyg_transformed in db:
+    while True:
+        row_data = db.get_unprocessed()
+        if row_data is None:
+            break
+
+        rowid, set_type, pyg_blob, _pyg_transformed = row_data
         pyg = pickle.loads(pyg_blob)
         pyg_transformed = graphgps_transform(pyg, config)
         pyg_transformed_blob = pickle.dumps(pyg_transformed)
         db.update_pyg_transformed(rowid, pyg_transformed_blob)
-    if rank == 0: print(f"Finished transforming {dataset_name} in {round(time.time()-t1,0)} seconds.")
+        print(f"Rank {rank} updated row id {rowid}")
 
+    if rank == 0: print(f"Finished transforming {dataset_name} in {round(time.time()-t1,0)} seconds.")
     db.close()
 
     MPI.COMM_WORLD.Barrier()
