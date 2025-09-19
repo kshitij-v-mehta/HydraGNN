@@ -18,19 +18,23 @@ from hydragnn.utils.descriptors_and_embeddings.topologicaldescriptors import (
 from utilities.graph_gps.db import DB
 
 
-def graphgps_transform(data, config):
+def prepare_transform():
+    # Transformation to create positional and structural laplacian encoders
+    # Chemical encoder
+    ChemEncoder = ChemicalFeatureEncoder()
+
+    # LPE
+    lpe_transform = AddLaplacianEigenvectorPE(
+        k=config["NeuralNetwork"]["Architecture"]["num_laplacian_eigs"],
+        attr_name="lpe",
+        is_undirected=True,
+    )
+
+    return ChemEncoder, lpe_transform
+
+
+def graphgps_transform(ChemEncoder, lpe_transform, data, config):
     try:
-        # Transformation to create positional and structural laplacian encoders
-        # Chemical encoder
-        ChemEncoder = ChemicalFeatureEncoder()
-
-        # LPE
-        lpe_transform = AddLaplacianEigenvectorPE(
-            k=config["NeuralNetwork"]["Architecture"]["num_laplacian_eigs"],
-            attr_name="lpe",
-            is_undirected=True,
-        )
-
         data = lpe_transform(data)  # lapPE
 
     except:
@@ -70,6 +74,8 @@ if __name__ == "__main__":
     mydbfile = os.path.join(db_dir_path, dataset_name + f"_{rank}.db")
     db = DB(mydbfile)
 
+    ChemEncoder, lpe_transform = prepare_transform()
+
     # Process all pyg objects
     if rank == 0: t1 = time.time()
     while True:
@@ -81,7 +87,7 @@ if __name__ == "__main__":
         pyg = pickle.loads(pyg_blob)
         print(f"Rank {rank} applying transform on row id {rowid}")
         gpst1 = time.time()
-        pyg_transformed = graphgps_transform(pyg, config)
+        pyg_transformed = graphgps_transform(ChemEncoder, lpe_transform, pyg, config)
         gpst2 = time.time()
         pyg_transformed_blob = pickle.dumps(pyg_transformed)
         iot1 = time.time()
