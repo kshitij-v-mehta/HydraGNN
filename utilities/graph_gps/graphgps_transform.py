@@ -80,12 +80,16 @@ if __name__ == "__main__":
         rowid, set_type, pyg_blob, _pyg_transformed = row_data
         pyg = pickle.loads(pyg_blob)
         print(f"Rank {rank} applying transform on row id {rowid}")
+        gpst1 = time.time()
         pyg_transformed = graphgps_transform(pyg, config)
+        gpst2 = time.time()
         pyg_transformed_blob = pickle.dumps(pyg_transformed)
+        iot1 = time.time()
         db.update_pyg_transformed(rowid, pyg_transformed_blob)
-        print(f"Rank {rank} updated row id {rowid}")
+        iot2 = time.time()
+        print(f"Rank {rank} updated row id {rowid}. transform time: {round(gpst2-gpst1)}, update time: {round(iot2-iot1)}")
 
-    if rank == 0: print(f"Finished transforming {dataset_name} in {round(time.time()-t1,0)} seconds.")
+    if rank == 0: print(f"Finished transforming {dataset_name} in {round(time.time()-t1)} seconds.")
     db.close()
 
     MPI.COMM_WORLD.Barrier()
