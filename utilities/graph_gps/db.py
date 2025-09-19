@@ -23,7 +23,7 @@ class DB:
 
         # A cache to hold rows while reading data in
         self.read_cache = []
-        self.read_cache_size = 1000
+        self.read_cache_size = 100
 
         # Count of how many transactions are run before commit must be called
         self.pending_commits = 0
