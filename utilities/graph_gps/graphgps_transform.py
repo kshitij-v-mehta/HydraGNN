@@ -1,12 +1,8 @@
-import glob
 import json
-import os
-import pickle
 import sys
 import time
 
 import torch
-from fontTools.misc.psCharStrings import t2Operators
 from mpi4py import MPI
 from torch_geometric.transforms import AddLaplacianEigenvectorPE
 
@@ -18,6 +14,8 @@ from hydragnn.utils.descriptors_and_embeddings.topologicaldescriptors import (
     compute_topo_features,
 )
 from hydragnn.utils.distributed import nsplit
+
+from adios2 import FileReader
 
 
 def read_adios_data(adios_in, rank, nproc, comm=MPI.COMM_WORLD):
@@ -32,15 +30,18 @@ def read_adios_data(adios_in, rank, nproc, comm=MPI.COMM_WORLD):
         dataset.setkeys(common_variable_names)
         dataset.setsubset(rx[0], rx[-1] + 1, preload=True)
 
-    return trainset, valset, testset
+    with FileReader(adios_in) as f:
+        pna_deg = f.read_attribute('pna_deg')
+
+    return trainset, valset, testset, pna_deg
 
 
-def write_adios_data(adios_out, trainset, valset, testset, comm):
+def write_adios_data(adios_out, trainset, valset, testset, pna_deg, comm):
     adwriter = AdiosWriter(adios_out, comm)
     adwriter.add("trainset", trainset)
     adwriter.add("valset", valset)
     adwriter.add("testset", testset)
-    adwriter.add_global("pna_deg", trainset.pna_deg)
+    adwriter.add_global("pna_deg", pna_deg)
     adwriter.add_global("dataset_name", trainset.dataset_name)
     adwriter.save()
 
@@ -98,7 +99,7 @@ if __name__ == "__main__":
         print("Reading adios data")
         t1 = time.time()
 
-    trainset, valset, test = read_adios_data(adios_in, rank, size, comm)
+    trainset, valset, test, pna_deg = read_adios_data(adios_in, rank, size, comm)
 
     if rank == 0:
         t2 = time.time()
@@ -120,7 +121,7 @@ if __name__ == "__main__":
         print("Writing adios data")
         t1 = time.time()
 
-    write_adios_data(adios_out, trainset, valset, test, comm)
+    write_adios_data(adios_out, trainset, valset, test, pna_deg, comm)
 
     if rank == 0:
         t2 = time.time()
