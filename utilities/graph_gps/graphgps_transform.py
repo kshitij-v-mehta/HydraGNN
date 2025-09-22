@@ -30,19 +30,25 @@ def read_adios_data(adios_in, rank, nproc, comm=MPI.COMM_WORLD):
         dataset.setkeys(common_variable_names)
         dataset.setsubset(rx[0], rx[-1] + 1, preload=True)
 
-    with FileReader(adios_in) as f:
-        pna_deg = f.read_attribute('pna_deg')
+    write_attrs = dict()
+    if rank == 0:
+        with FileReader(adios_in) as f:
+            attr = f.available_attributes()
+            for a in attr.keys():
+                if not any(s in a for s in ['trainset/', 'valset/', 'testset/', "total_ndata"]):
+                    write_attrs[a] = f.read_attribute(a)
 
-    return trainset, valset, testset, pna_deg
+    write_attrs = comm.bcast(write_attrs, root=0)
+    return trainset, valset, testset, write_attrs
 
 
-def write_adios_data(adios_out, trainset, valset, testset, pna_deg, comm):
+def write_adios_data(adios_out, trainset, valset, testset, attrs, comm):
     adwriter = AdiosWriter(adios_out, comm)
     adwriter.add("trainset", trainset)
     adwriter.add("valset", valset)
     adwriter.add("testset", testset)
-    adwriter.add_global("pna_deg", pna_deg)
-    adwriter.add_global("dataset_name", trainset.dataset_name)
+    for a in attrs.keys():
+        adwriter.add_global(a, attrs[a])
     adwriter.save()
 
 
@@ -99,7 +105,7 @@ if __name__ == "__main__":
         print("Reading adios data")
         t1 = time.time()
 
-    trainset, valset, test, pna_deg = read_adios_data(adios_in, rank, size, comm)
+    trainset, valset, test, attrs = read_adios_data(adios_in, rank, size, comm)
 
     if rank == 0:
         t2 = time.time()
@@ -121,7 +127,7 @@ if __name__ == "__main__":
         print("Writing adios data")
         t1 = time.time()
 
-    write_adios_data(adios_out, trainset, valset, test, pna_deg, comm)
+    write_adios_data(adios_out, trainset, valset, test, attrs, comm)
 
     if rank == 0:
         t2 = time.time()
