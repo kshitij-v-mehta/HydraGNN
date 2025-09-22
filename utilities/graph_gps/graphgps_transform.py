@@ -19,15 +19,12 @@ from adios2 import FileReader
 
 
 def read_adios_data(adios_in, rank, nproc, comm=MPI.COMM_WORLD):
-    common_variable_names = ["x", "edge_index", "edge_attr", "energy", "energy_per_atom", "forces", "pos", "y"]
-
     trainset = AdiosDataset(adios_in, "trainset", comm)
     valset = AdiosDataset(adios_in, "valset", comm)
     testset = AdiosDataset(adios_in, "testset", comm)
 
     for dataset in (trainset, valset, testset):
         rx = list(nsplit(range(len(dataset)), nproc))[rank]
-        dataset.setkeys(common_variable_names)
         dataset.setsubset(rx[0], rx[-1] + 1, preload=True)
 
     write_attrs = dict()
