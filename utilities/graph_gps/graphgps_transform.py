@@ -17,6 +17,10 @@ from hydragnn.utils.distributed import nsplit
 
 from adios2 import FileReader
 
+import hydragnn
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
+
 
 def read_adios_data(adios_in, rank, nproc, comm=MPI.COMM_WORLD):
     trainset = AdiosDataset(adios_in, "trainset", comm)
@@ -25,6 +29,7 @@ def read_adios_data(adios_in, rank, nproc, comm=MPI.COMM_WORLD):
 
     for dataset in (trainset, valset, testset):
         rx = list(nsplit(range(len(dataset)), nproc))[rank]
+        print(f"Rank {rank} reading indices {rx[0]} to {rx[-1]} of {len(dataset)}")
         dataset.setsubset(rx[0], rx[-1] + 1, preload=True)
 
     write_attrs = dict()
@@ -32,7 +37,9 @@ def read_adios_data(adios_in, rank, nproc, comm=MPI.COMM_WORLD):
         with FileReader(adios_in) as f:
             attr = f.available_attributes()
             for a in attr.keys():
-                if not any(s in a for s in ['trainset/', 'valset/', 'testset/', "total_ndata"]):
+                if not any(
+                    s in a for s in ["trainset/", "valset/", "testset/", "total_ndata"]
+                ):
                     write_attrs[a] = f.read_attribute(a)
 
     write_attrs = comm.bcast(write_attrs, root=0)
@@ -84,11 +91,18 @@ def graphgps_transform(ChemEncoder, lpe_transform, data, config):
 
 
 if __name__ == "__main__":
+
+    ## Set up logging
+    hydragnn.utils.print.setup_log("graphgps_transform")
+
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
+    print(f"Rank {rank} of {size}")
 
-    assert len(sys.argv) == 4, f"Run as {sys.argv[0]} <input adios file> <output adios file> <config file>"
+    assert (
+        len(sys.argv) == 4
+    ), f"Run as {sys.argv[0]} <input adios file> <output adios file> <config file>"
     adios_in = sys.argv[1]
     adios_out = sys.argv[2]
     configfile = sys.argv[3]
@@ -113,8 +127,19 @@ if __name__ == "__main__":
         t1 = time.time()
 
     for dataset in (trainset, valset, test):
-        for pyg in dataset:
-            graphgps_transform(ChemEncoder, lpe_transform, pyg, config)
+        # graphgps_transform(ChemEncoder, lpe_transform, pyg, config)
+
+        future_list = list()
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            for pyg in tqdm(dataset):
+                future_list.append(
+                    executor.submit(
+                        graphgps_transform, ChemEncoder, lpe_transform, pyg, config
+                    )
+                )
+
+            for future in tqdm(future_list):
+                future.result()
 
     if rank == 0:
         t2 = time.time()
@@ -131,4 +156,5 @@ if __name__ == "__main__":
         print(f"Write adios data in {round(t2 - t1)} seconds")
 
     MPI.COMM_WORLD.Barrier()
-    if rank == 0: print("All done. Goodbye.")
+    if rank == 0:
+        print("All done. Goodbye.")
