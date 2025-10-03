@@ -208,7 +208,7 @@ class AdiosWriter:
                 #     continue
 
                 arr_list = list()
-                for data in self.dataset[label]:
+                for data in tqdm(self.dataset[label], desc=f"Processing: {label}/{k}"):
                     if isinstance(data[k], torch.Tensor):
                         arr_list.append(data[k].cpu().numpy())
                     elif isinstance(data[k], np.ndarray):
