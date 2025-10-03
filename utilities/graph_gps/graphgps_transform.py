@@ -32,6 +32,7 @@ def read_adios_data(adios_in, rank, nproc, comm=MPI.COMM_WORLD):
         print(f"Rank {rank} reading indices {rx[0]} to {rx[-1]} of {len(dataset)}")
         dataset.setsubset(rx[0], rx[-1] + 1, preload=True)
 
+    # Copy any additional attributes in the ADIOS file
     write_attrs = dict()
     if rank == 0:
         with FileReader(adios_in) as f:
