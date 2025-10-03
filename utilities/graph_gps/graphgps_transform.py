@@ -131,7 +131,7 @@ if __name__ == "__main__":
         # graphgps_transform(ChemEncoder, lpe_transform, pyg, config)
 
         future_list = list()
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor() as executor:
             for pyg in tqdm(dataset):
                 future_list.append(
                     executor.submit(
