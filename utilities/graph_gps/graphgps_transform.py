@@ -22,7 +22,7 @@ from adios2 import FileReader
 
 import hydragnn
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def read_adios_data(adios_in, rank, nproc, comm=MPI.COMM_WORLD):
@@ -100,7 +100,7 @@ def transform_one(i, dataset, ChemEncoder, lpe_transform, config):
     """
     try:
         data = graphgps_transform(ChemEncoder=ChemEncoder, lpe_transform=lpe_transform, data=dataset[i], config=config)
-        dataset[i] = data
+        return data
     except Exception as e:
         print(f"Encountered non-fatal exception {e} at {traceback.format_exc()}. Ignoring data sample")
         # RuntimeError may occur if number of atoms is less than the number of eigenvectors. In that case,
@@ -117,7 +117,6 @@ if __name__ == "__main__":
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
-    print(f"Rank {rank} of {size}")
 
     assert (
         len(sys.argv) == 4
@@ -135,7 +134,7 @@ if __name__ == "__main__":
         print("Reading adios data")
         t1 = time.time()
 
-    trainset, valset, test, attrs = read_adios_data(adios_in, rank, size, comm)
+    trainset, valset, testset, attrs = read_adios_data(adios_in, rank, size, comm)
 
     if rank == 0:
         t2 = time.time()
@@ -145,13 +144,21 @@ if __name__ == "__main__":
         print(f"Applying graph GPS transform")
         t1 = time.time()
 
-    for dataset in (trainset, valset, test):
-        # for i, pyg in enumerate(dataset):
-        #     dataset[i] = graphgps_transform(ChemEncoder, lpe_transform, pyg, config)
-
+    datasets_out = {trainset.label: [], valset.label: [], testset.label: []}
+    for dataset in (trainset, valset, testset):
         with ThreadPoolExecutor() as executor:
-            tranform_func = partial(transform_one, dataset=dataset, ChemEncoder=ChemEncoder, lpe_transform=lpe_transform, config=config)
-            list(executor.map(tranform_func, range(len(dataset))))
+            transform_func = partial(transform_one, dataset=dataset, ChemEncoder=ChemEncoder,
+                                    lpe_transform=lpe_transform, config=config)
+            futures = [executor.submit(transform_one, i, dataset=dataset, ChemEncoder=ChemEncoder,
+                                       lpe_transform=lpe_transform, config=config) for i in range(len(dataset))]
+
+            for fut in as_completed(futures):
+                try:
+                    data = fut.result()
+                    if data is not None:
+                        datasets_out[dataset.label].append(data)
+                except:
+                    pass
 
     if rank == 0:
         t2 = time.time()
@@ -161,7 +168,7 @@ if __name__ == "__main__":
         print("Writing adios data")
         t1 = time.time()
 
-    write_adios_data(adios_out, trainset, valset, test, attrs, comm)
+    write_adios_data(adios_out, datasets_out['trainset'], datasets_out['valset'], datasets_out['testset'], attrs, comm)
 
     if rank == 0:
         t2 = time.time()
