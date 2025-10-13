@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+import traceback
 from functools import partial
 
 import torch
@@ -98,12 +99,14 @@ def transform_one(i, dataset, ChemEncoder, lpe_transform, config):
     For use with ThreadPoolExecutor
     """
     try:
-        data = graphgps_transform(ChemEncoder, lpe_transform, dataset[i], config)
+        data = graphgps_transform(ChemEncoder=ChemEncoder, lpe_transform=lpe_transform, data=dataset[i], config=config)
         dataset[i] = data
-    except:
+    except Exception as e:
+        print(f"Encountered non-fatal exception {e} at {traceback.format_exc()}. Ignoring data sample")
         # RuntimeError may occur if number of atoms is less than the number of eigenvectors. In that case,
         # ignore this dataset sample
         pass
+        sys.exit(1)
 
 
 if __name__ == "__main__":
@@ -147,7 +150,7 @@ if __name__ == "__main__":
         #     dataset[i] = graphgps_transform(ChemEncoder, lpe_transform, pyg, config)
 
         with ThreadPoolExecutor() as executor:
-            tranform_func = partial(transform_one, dataset, ChemEncoder, lpe_transform, config)
+            tranform_func = partial(transform_one, dataset=dataset, ChemEncoder=ChemEncoder, lpe_transform=lpe_transform, config=config)
             list(executor.map(tranform_func, range(len(dataset))))
 
     if rank == 0:
