@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import time
 
@@ -20,6 +21,8 @@ from adios2 import FileReader
 import hydragnn
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
+
+import threading
 
 
 def read_adios_data(adios_in, rank, nproc, comm=MPI.COMM_WORLD):
@@ -64,7 +67,7 @@ def prepare_transform():
 
     # LPE
     lpe_transform = AddLaplacianEigenvectorPE(
-        k=config["NeuralNetwork"]["Architecture"]["num_laplacian_eigs"],
+        k=config["NeuralNetwork"]["Architecture"].get("num_laplacian_eigs", 5),  # return a default value of 5 if key not found
         attr_name="lpe",
         is_undirected=True,
     )
@@ -80,7 +83,7 @@ def graphgps_transform(ChemEncoder, lpe_transform, data, config):
         data.lpe = torch.zeros(
             [
                 data.num_nodes,
-                config["NeuralNetwork"]["Architecture"]["num_laplacian_eigs"],
+                config["NeuralNetwork"]["Architecture"].get("num_laplacian_eigs", 5),
             ],
             dtype=data.x.dtype,
             device=data.x.device,
