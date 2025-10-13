@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+from functools import partial
 
 import torch
 from mpi4py import MPI
@@ -21,8 +22,6 @@ from adios2 import FileReader
 import hydragnn
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
-
-import threading
 
 
 def read_adios_data(adios_in, rank, nproc, comm=MPI.COMM_WORLD):
@@ -94,6 +93,19 @@ def graphgps_transform(ChemEncoder, lpe_transform, data, config):
     return data
 
 
+def transform_one(i, dataset, ChemEncoder, lpe_transform, config):
+    """
+    For use with ThreadPoolExecutor
+    """
+    try:
+        data = graphgps_transform(ChemEncoder, lpe_transform, dataset[i], config)
+        dataset[i] = data
+    except:
+        # RuntimeError may occur if number of atoms is less than the number of eigenvectors. In that case,
+        # ignore this dataset sample
+        pass
+
+
 if __name__ == "__main__":
 
     ## Set up logging
@@ -131,19 +143,12 @@ if __name__ == "__main__":
         t1 = time.time()
 
     for dataset in (trainset, valset, test):
-        # graphgps_transform(ChemEncoder, lpe_transform, pyg, config)
+        # for i, pyg in enumerate(dataset):
+        #     dataset[i] = graphgps_transform(ChemEncoder, lpe_transform, pyg, config)
 
-        future_list = list()
         with ThreadPoolExecutor() as executor:
-            for pyg in tqdm(dataset):
-                future_list.append(
-                    executor.submit(
-                        graphgps_transform, ChemEncoder, lpe_transform, pyg, config
-                    )
-                )
-
-            for future in tqdm(future_list):
-                future.result()
+            tranform_func = partial(transform_one, dataset, ChemEncoder, lpe_transform, config)
+            list(executor.map(tranform_func, range(len(dataset))))
 
     if rank == 0:
         t2 = time.time()
