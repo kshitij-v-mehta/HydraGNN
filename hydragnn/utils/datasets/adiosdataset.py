@@ -148,7 +148,6 @@ class AdiosWriter:
         elif isinstance(data, AbstractBaseDataset):
             self.dataset[label] = data
         else:
-            import pdb; pdb.set_trace()
             raise Exception("Unsuppored data type yet.")
 
     def save(self):
