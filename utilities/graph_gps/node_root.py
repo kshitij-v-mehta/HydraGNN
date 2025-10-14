@@ -24,6 +24,7 @@ def node_root(adios_in, adios_out):
 
         # iterate over trainset, valset, and testset and send pyg objects to workers
         t1 = time.time()
+        logger.debug(f"Node root on {mpi_utils.hostname} sending tasks to workers")
         for k in datasets_in.keys():
             if k == 'extra_attrs': continue
 
@@ -35,16 +36,17 @@ def node_root(adios_in, adios_out):
                 mpi_utils.node_comm.send(pyg_chunk, dest=worker_rank)
 
             # Receive list of transformed pyg objects from workers
+            logger.debug(f"Node root on {mpi_utils.hostname} waiting to receive tasks from workers")
             for worker_rank in range(1, mpi_utils.node_size):
                 transformed_pyg_list = mpi_utils.node_comm.recv(source=worker_rank)
                 datasets_out[k].extend(transformed_pyg_list)
 
         # signal workers to quit
+        logger.debug(f"Node root on {mpi_utils.hostname} signaling workers to quit.")
         for worker_rank in range(1, mpi_utils.node_size):
             mpi_utils.node_comm.send(None, dest=worker_rank)
         t2 = time.time()
-        if mpi_utils.node_rank == 0:
-            logger.info(f"Graph transforms done in {round(t2-t1)} seconds.")
+        logger.info(f"Graph transforms on {mpi_utils.hostname} done in {round(t2-t1)} seconds.")
 
         # write the transformed pyg objects
         t1 = time.time()
