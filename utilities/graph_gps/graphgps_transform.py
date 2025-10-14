@@ -146,7 +146,7 @@ if __name__ == "__main__":
 
     datasets_out = {trainset.label: [], valset.label: [], testset.label: []}
     for dataset in (trainset, valset, testset):
-        with ThreadPoolExecutor() as executor:
+        with ProcessPoolExecutor() as executor:
             transform_func = partial(transform_one, dataset=dataset, ChemEncoder=ChemEncoder,
                                     lpe_transform=lpe_transform, config=config)
             futures = [executor.submit(transform_one, i, dataset=dataset, ChemEncoder=ChemEncoder,
