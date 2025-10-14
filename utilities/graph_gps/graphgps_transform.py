@@ -41,7 +41,7 @@ def graphgps_transform(ChemEncoder, lpe_transform, data, config):
                 device=data.x.device,
             )
         except Exception as e:
-            logger.info(e, "Ignoring.")
+            logger.warn(f"Encountered {e} during transform. Ignoring sample.")
             return None
 
 
