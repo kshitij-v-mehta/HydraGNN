@@ -3,12 +3,16 @@ import mpi_utils
 import traceback
 from logger import logger
 from mpi4py import MPI
+import time
 
 
 def node_root(adios_in, adios_out):
     try:
         # Read adios data
+        t1 = time.time()
         datasets_in = read_adios_data(adios_in)
+        t2 = time.time()
+        if mpi_utils.node_roots_rank == 0: logger.info(f"ADIOS reading done in {round(t2-t1)} seconds.")
 
         # Hold transformed pyg objects in a new dict
         datasets_out = dict()
@@ -19,6 +23,7 @@ def node_root(adios_in, adios_out):
             datasets_out[k] = []
 
         # iterate over trainset, valset, and testset and send pyg objects to workers
+        t1 = time.time()
         for k in datasets_in.keys():
             if k == 'extra_attrs': continue
 
@@ -37,9 +42,16 @@ def node_root(adios_in, adios_out):
         # signal workers to quit
         for worker_rank in range(1, mpi_utils.node_size):
             mpi_utils.node_comm.send(None, dest=worker_rank)
+        t2 = time.time()
+        if mpi_utils.node_rank == 0:
+            logger.info(f"Graph transforms done in {round(t2-t1)} seconds.")
 
         # write the transformed pyg objects
+        t1 = time.time()
         write_adios_data(adios_out, datasets_out)
+        t2 = time.time()
+        if mpi_utils.node_roots_rank == 0:
+            logger.info(f"ADIOS writing done in {round(t2-t1)} seconds.")
 
     except Exception as e:
         logger.error(f"Exception {e} at {traceback.format_exc()}")
