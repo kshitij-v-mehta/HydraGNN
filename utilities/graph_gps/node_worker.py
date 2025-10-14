@@ -4,7 +4,7 @@ import graphgps_transform
 
 def node_worker(config):
     # Prepare the transform function
-    ChemEncoder, lpe_transform = graphgps_transform.prepare_transform()
+    ChemEncoder, lpe_transform = graphgps_transform.prepare_transform(config)
 
     # Keep accepting assignments from the node root till None is signalled
     while True:

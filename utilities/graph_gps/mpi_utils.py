@@ -27,14 +27,14 @@ node_size = None
 
 node_roots_comm = None
 node_roots_rank = None
+node_roots_size = None
 
-node_roots_comm = None
 node_workers_comm = None
 
 
 def _init():
     global global_comm, global_rank, global_size, node_comm, node_rank, node_size, node_roots_comm, node_roots_rank, \
-        node_roots_comm, node_workers_comm
+        node_roots_size, node_workers_comm
 
     global_comm = MPI.COMM_WORLD
     global_rank = global_comm.Get_rank()
@@ -45,6 +45,9 @@ def _init():
     node_size = node_comm.Get_size()
 
     node_roots_comm = global_comm.Split(color=1 if node_rank == 0 else MPI.UNDEFINED, key=global_rank)
+    node_roots_rank = node_roots_comm.Get_rank()
+    node_roots_size = node_roots_comm.Get_size()
+
     node_workers_comm = global_comm.Split(color=1 if node_rank != 0 else MPI.UNDEFINED, key=global_rank)
 
 
