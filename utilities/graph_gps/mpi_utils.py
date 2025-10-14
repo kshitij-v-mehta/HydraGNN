@@ -31,11 +31,12 @@ node_roots_rank = None
 node_roots_size = None
 
 node_workers_comm = None
+hostname = None
 
 
 def _init():
     global global_comm, global_rank, global_size, node_comm, node_rank, node_size, node_roots_comm, node_roots_rank, \
-        node_roots_size, node_workers_comm
+        node_roots_size, node_workers_comm, hostname
 
     try:
         global_comm = MPI.COMM_WORLD
@@ -52,6 +53,8 @@ def _init():
             node_roots_size = node_roots_comm.Get_size()
 
         node_workers_comm = global_comm.Split(color=1 if node_rank != 0 else MPI.UNDEFINED, key=global_rank)
+
+        hostname = MPI.Get_processor_name()
 
     except Exception as e:
         logger.error(e)
