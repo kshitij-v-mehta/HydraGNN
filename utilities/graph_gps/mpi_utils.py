@@ -16,6 +16,7 @@ Create a set of MPI communicators:
 """
 
 from mpi4py import MPI
+from logger import logger
 
 global_comm = None
 global_rank = None
@@ -36,19 +37,25 @@ def _init():
     global global_comm, global_rank, global_size, node_comm, node_rank, node_size, node_roots_comm, node_roots_rank, \
         node_roots_size, node_workers_comm
 
-    global_comm = MPI.COMM_WORLD
-    global_rank = global_comm.Get_rank()
-    global_size = global_comm.Get_size()
+    try:
+        global_comm = MPI.COMM_WORLD
+        global_rank = global_comm.Get_rank()
+        global_size = global_comm.Get_size()
 
-    node_comm = global_comm.Split_type(split_type=MPI.COMM_TYPE_SHARED, key=0)
-    node_rank = node_comm.Get_rank()
-    node_size = node_comm.Get_size()
+        node_comm = global_comm.Split_type(split_type=MPI.COMM_TYPE_SHARED, key=0)
+        node_rank = node_comm.Get_rank()
+        node_size = node_comm.Get_size()
 
-    node_roots_comm = global_comm.Split(color=1 if node_rank == 0 else MPI.UNDEFINED, key=global_rank)
-    node_roots_rank = node_roots_comm.Get_rank()
-    node_roots_size = node_roots_comm.Get_size()
+        node_roots_comm = global_comm.Split(color=1 if node_rank == 0 else MPI.UNDEFINED, key=global_rank)
+        if node_roots_comm != MPI.COMM_NULL:
+            node_roots_rank = node_roots_comm.Get_rank()
+            node_roots_size = node_roots_comm.Get_size()
 
-    node_workers_comm = global_comm.Split(color=1 if node_rank != 0 else MPI.UNDEFINED, key=global_rank)
+        node_workers_comm = global_comm.Split(color=1 if node_rank != 0 else MPI.UNDEFINED, key=global_rank)
+
+    except Exception as e:
+        logger.error(e)
+        MPI.COMM_WORLD.Abort(1)
 
 
 # Initialize at import

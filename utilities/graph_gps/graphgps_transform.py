@@ -1,3 +1,4 @@
+from logger import logger
 import torch
 from torch_geometric.transforms import AddLaplacianEigenvectorPE
 
@@ -30,14 +31,19 @@ def graphgps_transform(ChemEncoder, lpe_transform, data, config):
         data = lpe_transform(data)  # lapPE
 
     except:
-        data.lpe = torch.zeros(
-            [
-                data.num_nodes,
-                config["NeuralNetwork"]["Architecture"].get("num_laplacian_eigs", 5),
-            ],
-            dtype=data.x.dtype,
-            device=data.x.device,
-        )
+        try:
+            data.lpe = torch.zeros(
+                [
+                    data.num_nodes,
+                    config["NeuralNetwork"]["Architecture"].get("num_laplacian_eigs", 5),
+                ],
+                dtype=data.x.dtype,
+                device=data.x.device,
+            )
+        except Exception as e:
+            logger.info(e, "Ignoring.")
+            return None
+
 
     data = ChemEncoder.compute_chem_features(data)
     data = compute_topo_features(data)

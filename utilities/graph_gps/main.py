@@ -1,20 +1,19 @@
 from mpi4py import MPI
 import mpi_utils
 import sys, json
-import hydragnn
 from node_root import node_root
 from node_worker import node_worker
 
 
 def main():
-    hydragnn.utils.print.setup_log("graphgps_transform")
-
     # Read input arguments
     assert (len(sys.argv) == 4), \
         f"Run as {sys.argv[0]} <input adios file> <output adios file> <config file>"
     adios_in = sys.argv[1]
     adios_out = sys.argv[2]
     configfile = sys.argv[3]
+
+    assert mpi_utils.global_size > 1, "Need at least two MPI ranks"
 
     with open(configfile, "r") as f:
         config = json.load(f)
