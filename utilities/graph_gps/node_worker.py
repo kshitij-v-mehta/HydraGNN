@@ -21,9 +21,9 @@ def node_worker(config):
             transformed_object_list = []
             while len(pyg_object_list) > 0:
                 pyg_object = pyg_object_list.pop()  # pop to save memory
-                transformed_pyg = graphgps_transform.graphgps_transform(ChemEncoder, lpe_transform, pyg_object, config)
-                if transformed_pyg is not None:
-                    transformed_object_list.append(transformed_pyg)
+                pyg_object = graphgps_transform.graphgps_transform(ChemEncoder, lpe_transform, pyg_object, config)
+                if pyg_object is not None:
+                    transformed_object_list.append(pyg_object)
 
             # Send the gps transformed objects to the node root
             mpi_utils.node_comm.send(transformed_object_list, dest=0)
