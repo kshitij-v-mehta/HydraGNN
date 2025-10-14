@@ -19,7 +19,7 @@ def read_adios_data(adios_in):
 
     for dataset in (trainset, valset, testset):
         rx = list(nsplit(range(len(dataset)), nproc))[rank]
-        print(f"Rank {rank} reading indices {rx[0]} to {rx[-1]} of {len(dataset)}")
+        print(f"Rank {rank} on {mpi_utils.hostname} reading indices {rx[0]} to {rx[-1]} of {len(dataset)}")
         dataset.setsubset(rx[0], rx[-1] + 1, preload=True)
 
         # Iterate to populate the PyG Data object
