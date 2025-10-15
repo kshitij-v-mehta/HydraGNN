@@ -1,3 +1,5 @@
+from torch_geometric.testing import minPython
+
 from adios_io import read_adios_data, write_adios_data
 import mpi_utils
 import traceback
@@ -9,6 +11,7 @@ import time
 def node_root(adios_in, adios_out):
     try:
         # Read adios data
+        task_size = 10000
         t1 = time.time()
         datasets_in = read_adios_data(adios_in)
         t2 = time.time()
@@ -25,26 +28,45 @@ def node_root(adios_in, adios_out):
         # iterate over trainset, valset, and testset and send pyg objects to workers
         t1 = time.time()
         logger.debug(f"Node root on {mpi_utils.hostname} sending tasks to workers")
+        status = MPI.Status()
+        workers_free = 0
         for k in datasets_in.keys():
             if k == 'extra_attrs': continue
 
             # Split list of PyG objects and send to workers
             dataset = datasets_in[k]
-            pyg_chunks = _split_pyg_list(dataset, mpi_utils.node_size-1)
-            for worker_rank in range(1, mpi_utils.node_size):
-                pyg_chunk = pyg_chunks.pop()
-                mpi_utils.node_comm.send(pyg_chunk, dest=worker_rank)
+            while len(dataset) > 0:
+                # Receive ping or completed tasks from a worker
+                data_t = mpi_utils.node_comm.recv(source=MPI.ANY_SOURCE, status=status)
+                if data_t is not None:
+                    key, transformed_pyg_obj = data_t
+                    datasets_out[key].extend(transformed_pyg_obj)
+                else:
+                    pass  # this was a ready ping from a worker
+                worker = status.Get_source()
+                workers_free += 1
 
-            # Receive list of transformed pyg objects from workers
-            logger.debug(f"Node root on {mpi_utils.hostname} waiting to receive tasks from workers")
-            for worker_rank in range(1, mpi_utils.node_size):
-                transformed_pyg_list = mpi_utils.node_comm.recv(source=worker_rank)
-                datasets_out[k].extend(transformed_pyg_list)
+                # Send a chunk of objects to the worker
+                pyg_chunks = []
+                next_task_size = min(task_size, len(dataset))
+                for _ in range(next_task_size):
+                    pyg_chunks.append(dataset.pop())
+                mpi_utils.node_comm.send((k, pyg_chunks), dest=worker)
+                workers_free -= 1
 
-        # signal workers to quit
+        # Wait for all workers to finish
         logger.debug(f"Node root on {mpi_utils.hostname} signaling workers to quit.")
-        for worker_rank in range(1, mpi_utils.node_size):
-            mpi_utils.node_comm.send(None, dest=worker_rank)
+        while workers_free < mpi_utils.node_size - 1:
+            data_t = mpi_utils.node_comm.recv(source=MPI.ANY_SOURCE, status=status)
+            if data_t is not None:
+                key, transformed_pyg_obj = data_t
+                datasets_out[key].extend(transformed_pyg_obj)
+            workers_free += 1
+
+        # Tell all workers to terminate
+        for worker in range(1, mpi_utils.node_size):
+            mpi_utils.node_comm.send(None, dest=worker)
+
         t2 = time.time()
         logger.info(f"Graph transforms on {mpi_utils.hostname} done in {round(t2-t1)} seconds.")
 

@@ -10,14 +10,18 @@ def node_worker(config):
         # Prepare the transform function
         ChemEncoder, lpe_transform = graphgps_transform.prepare_transform(config)
 
+        # Send ping to indicate ready
+        mpi_utils.node_comm.send(None, dest=0)
+
         # Keep accepting assignments from the node root till None is signalled
         while True:
             # Receive the next set of pyg objects from the node root
-            pyg_object_list = mpi_utils.node_comm.recv(source=0)
-            if pyg_object_list is None:
+            data_t = mpi_utils.node_comm.recv(source=0)
+            if data_t is None:
                 break
 
             # Transform pyg objects one by one
+            k, pyg_object_list = data_t
             transformed_object_list = []
             while len(pyg_object_list) > 0:
                 pyg_object = pyg_object_list.pop()  # pop to save memory
@@ -26,7 +30,7 @@ def node_worker(config):
                     transformed_object_list.append(pyg_object)
 
             # Send the gps transformed objects to the node root
-            mpi_utils.node_comm.send(transformed_object_list, dest=0)
+            mpi_utils.node_comm.send((k, transformed_object_list), dest=0)
 
     except Exception as e:
         logger.error(f"Exception {e} at {traceback.format_exc()}")
