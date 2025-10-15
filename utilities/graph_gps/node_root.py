@@ -1,5 +1,3 @@
-from torch_geometric.testing import minPython
-
 from adios_io import read_adios_data, write_adios_data
 import mpi_utils
 import traceback
