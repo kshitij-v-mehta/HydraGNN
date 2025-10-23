@@ -1,5 +1,6 @@
 import sqlite3
-from queue import Queue
+import mpi_utils
+from logger import logger
 
 
 _conn: sqlite3.Connection = None
@@ -42,12 +43,17 @@ def write_to_db(db_path: str, set_type: int, pyg: bytes, cache_size: int):
 
 def _flush_cache():
     global _conn, _cursor, _cache
+
+    logger.debug(f"Rank {mpi_utils.global_rank} flushing cache")
     _cursor.executemany("INSERT or REPLACE INTO graph_data (set_type, pyg_obj) VALUES (?, ?)", _cache)
     _conn.commit()
     _cache = []
 
 
 def close_db():
-    global _conn
+    global _conn, _cursor
     _flush_cache()
     _conn.close()
+
+    _conn = None
+    _cursor = None
