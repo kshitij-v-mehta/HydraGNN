@@ -21,6 +21,7 @@ def node_root(adios_in, adios_out):
             # iterate over trainset, valset, and testset and send pyg objects to workers
             logger.debug(f"Node root on {mpi_utils.hostname} sending tasks in {label} to workers")
             for pyg_chunk in read_adios_dataset(adios_in, label):
+                logger.debug(f"Node root on {mpi_utils.hostname} read next chunk")
                 task_size = len(pyg_chunk) // (mpi_utils.node_size * 2)
 
                 # chop into tasks and dynamically assign them to workers

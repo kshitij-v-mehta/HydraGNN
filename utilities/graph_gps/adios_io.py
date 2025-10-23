@@ -6,7 +6,7 @@ from adios2 import FileReader
 from hydragnn.utils.distributed import nsplit
 
 
-chunksize = 10
+chunksize = int(1e5)
 
 
 def read_adios_dataset(adios_in, label):
