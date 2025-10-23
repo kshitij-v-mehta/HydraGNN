@@ -22,6 +22,9 @@ def node_worker(config):
 
             # Transform pyg objects one by one
             k, pyg_object_list = data_t
+            logger.debug(f"Worker {mpi_utils.node_rank} on {mpi_utils.hostname} received {len(pyg_object_list)} "
+                         f"objects from node root")
+
             transformed_object_list = []
             while len(pyg_object_list) > 0:
                 pyg_object = pyg_object_list.pop()  # pop to save memory
@@ -31,6 +34,8 @@ def node_worker(config):
 
             # Send the gps transformed objects to the node root
             mpi_utils.node_comm.send((k, transformed_object_list), dest=0)
+
+        logger.info(f"Worker {mpi_utils.node_rank} on {mpi_utils.hostname} done. Goodbye.")
 
     except Exception as e:
         logger.error(f"Exception {e} at {traceback.format_exc()}")
