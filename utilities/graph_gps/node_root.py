@@ -37,7 +37,7 @@ def _get_next_worker(datasets_out: dict):
     data = mpi_utils.node_comm.recv(source=MPI.ANY_SOURCE, status=status)
     if data is not None:
         label, pyg_obj = data
-        datasets_out[label] = pyg_obj
+        datasets_out[label].extend(pyg_obj)
     return status.Get_source()
 
 
