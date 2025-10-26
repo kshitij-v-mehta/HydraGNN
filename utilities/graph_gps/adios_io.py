@@ -10,6 +10,10 @@ chunksize = int(1e5)
 
 
 def read_adios_dataset(adios_in, label):
+    """
+    A generator that reads data from an adios file in chunks of size chunksize.
+    label can be trainset, valset, or testset.
+    """
     global chunksize
     comm = mpi_utils.node_roots_comm
     nproc = mpi_utils.node_roots_size
@@ -28,6 +32,9 @@ def read_adios_dataset(adios_in, label):
 
 
 def read_extra_attrs(adios_in):
+    """
+    Read extra attributes that may exist in the adios file
+    """
     comm = mpi_utils.node_roots_comm
     rank = mpi_utils.node_roots_rank
 
