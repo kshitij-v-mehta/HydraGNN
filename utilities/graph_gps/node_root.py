@@ -70,7 +70,7 @@ def node_root(adios_in):
     """
     try:
         for label in ('trainset', 'valset', 'testset'):
-            for pyg_chunk in read_adios_dataset(adios_in, label):
+            for pyg_chunk in read_adios_dataset(adios_in, label, mpi_utils.node_roots_comm):
                 _assign_to_workers(label, pyg_chunk)
 
         _wait_for_workers_to_finish()

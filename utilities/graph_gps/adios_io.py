@@ -9,13 +9,12 @@ from hydragnn.utils.distributed import nsplit
 chunksize = int(1e5)
 
 
-def read_adios_dataset(adios_in, label):
+def read_adios_dataset(adios_in, label, comm):
     """
     A generator that reads data from an adios file in chunks of size chunksize.
     label can be trainset, valset, or testset.
     """
     global chunksize
-    comm = mpi_utils.node_roots_comm
     nproc = mpi_utils.node_roots_size
     rank = mpi_utils.node_roots_rank
 
@@ -46,9 +45,7 @@ def read_extra_attrs(adios_in):
     return extra_attrs
 
 
-def write_adios_data(adios_out, datasets):
-    comm = mpi_utils.node_workers_comm
-
+def write_adios_data(adios_out, datasets, comm):
     adwriter = AdiosWriter(adios_out, comm)
     for k in datasets.keys():
         if k == 'extra_attrs': continue

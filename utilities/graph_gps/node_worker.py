@@ -43,7 +43,7 @@ def node_worker(config, adios_in, adios_out):
             transformed_object_list['extra_attrs'] = read_extra_attrs(adios_in)
 
         t1 = time.time()
-        write_adios_data(adios_out, transformed_object_list)
+        write_adios_data(adios_out, transformed_object_list, mpi_utils.node_workers_comm)
         t2 = time.time()
         logger.info(f"ADIOS writing done in {round(t2 - t1)} seconds.")
         logger.info(f"Worker {mpi_utils.node_rank} on {mpi_utils.hostname} done. Goodbye.")
