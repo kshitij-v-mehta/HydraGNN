@@ -20,9 +20,9 @@ def main():
 
     # Start node-local root and worker processes
     if mpi_utils.node_rank == 0:
-        node_root(adios_in, adios_out)
+        node_root(adios_in)
     else:
-        node_worker(config)
+        node_worker(config, adios_in, adios_out)
 
 
 if __name__ == '__main__':

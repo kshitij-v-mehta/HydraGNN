@@ -35,32 +35,26 @@ def read_extra_attrs(adios_in):
     """
     Read extra attributes that may exist in the adios file
     """
-    comm = mpi_utils.node_roots_comm
-    rank = mpi_utils.node_roots_rank
-
     extra_attrs = dict()
-    if rank == 0:
-        with FileReader(adios_in) as f:
-            attr = f.available_attributes()
-            for a in attr.keys():
-                if not any(
-                        s in a for s in ["trainset/", "valset/", "testset/", "total_ndata"]
-                ):
-                    extra_attrs[a] = f.read_attribute(a)
 
-    extra_attrs = comm.bcast(extra_attrs, root=0)
+    with FileReader(adios_in) as f:
+        attr = f.available_attributes()
+        for a in attr.keys():
+            if not any(s in a for s in ["trainset/", "valset/", "testset/", "total_ndata"]):
+                extra_attrs[a] = f.read_attribute(a)
+
     return extra_attrs
 
 
 def write_adios_data(adios_out, datasets):
-    comm = mpi_utils.node_roots_comm
+    comm = mpi_utils.node_workers_comm
 
     adwriter = AdiosWriter(adios_out, comm)
     for k in datasets.keys():
         if k == 'extra_attrs': continue
         adwriter.add(k, datasets[k])
 
-    attrs = datasets['extra_attrs']
+    attrs = datasets.get('extra_attrs', {})
     for a in attrs.keys():
         adwriter.add_global(a, attrs[a])
     adwriter.save()

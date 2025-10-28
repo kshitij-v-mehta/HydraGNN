@@ -3,7 +3,6 @@ import mpi_utils
 import traceback
 from logger import logger
 from mpi4py import MPI
-import time
 
 from utilities.graph_gps.adios_io import read_extra_attrs
 
@@ -29,66 +28,53 @@ def _create_task_list(pyg_chunk, task_size):
     return task_list
 
 
-def _get_next_worker(datasets_out: dict):
+def _get_next_worker():
     """
     Get the next worker that is ready for a task
     """
     status = MPI.Status()
-    data = mpi_utils.node_comm.recv(source=MPI.ANY_SOURCE, status=status)
-    if data is not None:
-        label, pyg_obj = data
-        datasets_out[label].extend(pyg_obj)
+    _ = mpi_utils.node_comm.recv(source=MPI.ANY_SOURCE, status=status)
     return status.Get_source()
 
 
-def _assign_to_workers(label, pyg_chunk, datasets_out):
+def _assign_to_workers(label, pyg_chunk):
     """
     Split the chunk of pyg objects into a lists of objects and assign them to workers
     """
     task_size = min(len(pyg_chunk), len(pyg_chunk) // (2*mpi_utils.node_size))
-    logger.debug(f"Node root on {mpi_utils.hostname} received {len(pyg_chunk)} {label} objects from adios."
+    logger.debug(f"Node root on {mpi_utils.hostname} received {len(pyg_chunk)} {label} objects from adios. "
                  f"Sending tasks to workers in chunks of {task_size} objects")
 
     task_lists = _create_task_list(pyg_chunk, task_size)
     for task_list in task_lists:
-        w = _get_next_worker(datasets_out)
+        w = _get_next_worker()
         mpi_utils.node_comm.send((label, task_list), dest=w)
         logger.debug(f"Node root on {mpi_utils.hostname} assigned {len(task_list)} objects to worker {w}")
 
 
-def _wait_for_workers_to_finish(datasets_out):
+def _wait_for_workers_to_finish():
     """
     Wait for all workers to finish transforms and then signal them to quit
     """
     logger.debug(f"Node root on {mpi_utils.hostname} waiting for workers to finish")
     for _ in range(mpi_utils.node_size-1):
-        w = _get_next_worker(datasets_out)
+        w = _get_next_worker()
         mpi_utils.node_comm.send(None, dest=w)
 
 
-def node_root(adios_in, adios_out):
+def node_root(adios_in):
     """
     Root process of each node. It reads in pyg objects in chunks from the adios file and assigns them dynamically to
     worker processes on the node. When all objects have been transformed, the node root writes them into the output
     adios file.
     """
     try:
-        datasets_out = {'trainset': [], 'valset': [], 'testset': []}
-
         for label in ('trainset', 'valset', 'testset'):
             for pyg_chunk in read_adios_dataset(adios_in, label):
-                _assign_to_workers(label, pyg_chunk, datasets_out)
+                _assign_to_workers(label, pyg_chunk)
 
-        _wait_for_workers_to_finish(datasets_out)
-
-        datasets_out['extra_attrs'] = read_extra_attrs(adios_in)
+        _wait_for_workers_to_finish()
         logger.info(f"Graph transforms on {mpi_utils.hostname} done")
-
-        t1 = time.time()
-        write_adios_data(adios_out, datasets_out)
-        t2 = time.time()
-        if mpi_utils.node_roots_rank == 0:
-            logger.info(f"ADIOS writing done in {round(t2 - t1)} seconds.")
 
     except Exception as e:
         logger.error(f"Exception {e} at {traceback.format_exc()}")
