@@ -28,6 +28,8 @@ from adios2 import Stream, FileReader
 def _serialize_pyg_data(data: Data) -> np.ndarray:
     """Serialize a PyG Data object to a numpy uint8 array."""
     serialized_bytes = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
+    # np.frombuffer returns a view; copy() ensures we own the data
+    # (needed because serialized_bytes may be garbage collected)
     return np.frombuffer(serialized_bytes, dtype=np.uint8).copy()
 
 
@@ -100,43 +102,46 @@ def serialize_pyg_parallel(
             local_offsets[i] = local_offsets[i-1] + local_sizes[i-1]
     
     with Stream(filename, "w", comm) as stream:
-        for _ in stream.steps(1):
-            # Write scalar metadata (only rank 0, but all ranks must participate)
-            if rank == 0:
-                stream.write("total_graphs", np.array([total_graphs], dtype=np.int64))
-                stream.write("total_bytes", np.array([total_bytes], dtype=np.int64))
-                stream.write("num_ranks", np.array([size], dtype=np.int64))
+        stream.begin_step()
+        
+        # Write scalar metadata (only rank 0, but all ranks must participate)
+        if rank == 0:
+            stream.write("total_graphs", np.array([total_graphs], dtype=np.int64))
+            stream.write("total_bytes", np.array([total_bytes], dtype=np.int64))
+            stream.write("num_ranks", np.array([size], dtype=np.int64))
+        
+        # Write graph_data as a global distributed array
+        # Each rank writes its portion: shape=[total], start=[byte_offset], count=[local_bytes]
+        if total_bytes > 0:
+            stream.write(
+                "graph_data",
+                local_data,
+                shape=[total_bytes],
+                start=[byte_offset],
+                count=[local_total_bytes]
+            )
+        
+        # Write graph_offsets as a global distributed array
+        # Each rank writes its portion: shape=[total_graphs], start=[graph_offset], count=[local_count]
+        if total_graphs > 0:
+            stream.write(
+                "graph_offsets",
+                local_offsets,
+                shape=[total_graphs],
+                start=[graph_offset],
+                count=[local_count]
+            )
             
-            # Write graph_data as a global distributed array
-            # Each rank writes its portion: shape=[total], start=[byte_offset], count=[local_bytes]
-            if total_bytes > 0:
-                stream.write(
-                    "graph_data",
-                    local_data,
-                    shape=[total_bytes],
-                    start=[byte_offset],
-                    count=[local_total_bytes]
-                )
-            
-            # Write graph_offsets as a global distributed array
-            # Each rank writes its portion: shape=[total_graphs], start=[graph_offset], count=[local_count]
-            if total_graphs > 0:
-                stream.write(
-                    "graph_offsets",
-                    local_offsets,
-                    shape=[total_graphs],
-                    start=[graph_offset],
-                    count=[local_count]
-                )
-                
-                # Write graph_sizes as a global distributed array
-                stream.write(
-                    "graph_sizes",
-                    local_sizes,
-                    shape=[total_graphs],
-                    start=[graph_offset],
-                    count=[local_count]
-                )
+            # Write graph_sizes as a global distributed array
+            stream.write(
+                "graph_sizes",
+                local_sizes,
+                shape=[total_graphs],
+                start=[graph_offset],
+                count=[local_count]
+            )
+        
+        stream.end_step()
     
     if rank == 0:
         print(f"Successfully wrote {total_graphs} graphs ({total_bytes} bytes) from {size} ranks to {filename}")
@@ -149,6 +154,8 @@ def deserialize_pyg_parallel(
     """
     Deserialize PyG Data objects in parallel from distributed global arrays.
     Each rank reads a subset of graphs.
+    
+    Optimized: reads all graph data for this rank in a single contiguous I/O operation.
     
     Args:
         filename: Input ADIOS2 file path
@@ -185,7 +192,7 @@ def deserialize_pyg_parallel(
         if local_count == 0:
             return data_list
         
-        # Read the offsets and sizes for our graphs
+        # Read offsets and sizes for this rank's graphs (single I/O each)
         local_offsets = reader.read(
             "graph_offsets",
             start=[start_graph],
@@ -197,17 +204,25 @@ def deserialize_pyg_parallel(
             count=[local_count]
         )
         
-        # Read each graph's data using its offset and size
+        # Calculate contiguous byte range for all this rank's graphs
+        byte_start = int(local_offsets[0])
+        byte_end = int(local_offsets[-1]) + int(local_sizes[-1])
+        total_local_bytes = byte_end - byte_start
+        
+        # Single I/O: read all graph data for this rank at once
+        all_local_data = reader.read(
+            "graph_data",
+            start=[byte_start],
+            count=[total_local_bytes]
+        )
+        
+        # Extract individual graphs from the contiguous buffer
         for i in range(local_count):
-            offset = int(local_offsets[i])
+            # Offset relative to our local buffer
+            rel_offset = int(local_offsets[i]) - byte_start
             size_bytes = int(local_sizes[i])
             
-            serialized = reader.read(
-                "graph_data",
-                start=[offset],
-                count=[size_bytes]
-            )
-            
+            serialized = all_local_data[rel_offset:rel_offset + size_bytes]
             data = _deserialize_pyg_data(serialized)
             data_list.append(data)
     
@@ -220,7 +235,7 @@ def deserialize_pyg_parallel(
 def deserialize_pyg_serial(filename: str) -> List[Data]:
     """
     Deserialize all PyG Data objects from a file (serial read).
-    Useful for post-processing or analysis on a single node.
+    Reads all data in one I/O operation for best performance.
     
     Args:
         filename: Input ADIOS2 file path
@@ -236,48 +251,7 @@ def deserialize_pyg_serial(filename: str) -> List[Data]:
         if total_graphs == 0:
             return data_list
         
-        # Read all offsets and sizes at once
-        all_offsets = reader.read("graph_offsets")
-        all_sizes = reader.read("graph_sizes")
-        
-        # Read each graph
-        for i in range(total_graphs):
-            offset = int(all_offsets[i])
-            size_bytes = int(all_sizes[i])
-            
-            serialized = reader.read(
-                "graph_data",
-                start=[offset],
-                count=[size_bytes]
-            )
-            
-            data = _deserialize_pyg_data(serialized)
-            data_list.append(data)
-    
-    print(f"Successfully read {total_graphs} graphs from {filename}")
-    return data_list
-
-
-def deserialize_pyg_serial_fast(filename: str) -> List[Data]:
-    """
-    Fast serial deserialization - reads entire data array at once.
-    More memory intensive but faster for smaller datasets.
-    
-    Args:
-        filename: Input ADIOS2 file path
-    
-    Returns:
-        List of all PyG Data objects
-    """
-    data_list = []
-    
-    with FileReader(filename) as reader:
-        total_graphs = int(reader.read("total_graphs").item())
-        
-        if total_graphs == 0:
-            return data_list
-        
-        # Read everything at once
+        # Read everything at once (3 I/O operations total)
         all_data = reader.read("graph_data")
         all_offsets = reader.read("graph_offsets")
         all_sizes = reader.read("graph_sizes")
@@ -293,6 +267,10 @@ def deserialize_pyg_serial_fast(filename: str) -> List[Data]:
     
     print(f"Successfully read {total_graphs} graphs from {filename}")
     return data_list
+
+
+# Alias for backward compatibility
+deserialize_pyg_serial_fast = deserialize_pyg_serial
 
 
 # ============================================================================
@@ -486,17 +464,24 @@ def deserialize_pyg_lowlevel_parallel(
     
     reader.PerformGets()
     
-    # Read each graph's data
+    # Calculate contiguous byte range for all this rank's graphs
+    byte_start = int(local_offsets[0])
+    byte_end = int(local_offsets[-1]) + int(local_sizes[-1])
+    total_local_bytes = byte_end - byte_start
+    
+    # Single I/O: read all graph data for this rank at once
     data_var = io_obj.InquireVariable("graph_data")
+    data_var.SetSelection([[byte_start], [total_local_bytes]])
+    all_local_data = np.zeros(total_local_bytes, dtype=np.uint8)
+    reader.Get(data_var, all_local_data)
+    reader.PerformGets()
+    
+    # Extract individual graphs from the contiguous buffer
     for i in range(local_count):
-        offset = int(local_offsets[i])
+        rel_offset = int(local_offsets[i]) - byte_start
         size_bytes = int(local_sizes[i])
         
-        data_var.SetSelection([[offset], [size_bytes]])
-        serialized = np.zeros(size_bytes, dtype=np.uint8)
-        reader.Get(data_var, serialized)
-        reader.PerformGets()
-        
+        serialized = all_local_data[rel_offset:rel_offset + size_bytes]
         data = _deserialize_pyg_data(serialized)
         data_list.append(data)
     
