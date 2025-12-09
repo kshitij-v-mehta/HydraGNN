@@ -1,4 +1,4 @@
-import pickle
+import os, sys, pickle
 from typing import List
 from mpi4py import MPI
 import numpy as np
@@ -134,16 +134,19 @@ def _write_new_adios_schema(
 
 # --------------------------------------------------------------------------- #
 if __name__ == '__main__':
+    assert len(sys.argv) == 3, f"Run as {sys.argv[0]} <input-adios-file> <output-adios_file>"
+    filename = sys.argv[1]
+    out_filename = sys.argv[2]
+
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
 
-    filename = "./Alexandria-new.bp"
     total_graphs = 0
     
-    with Stream(filename, "w", comm) as stream:
+    with Stream(out_filename, "w", comm) as stream:
         for _ in stream.steps(1):
             for label in ("trainset", "testset", "valset"):
-                pyg_objects = read_existing_dataset("./Alexandria.bp", label)
+                pyg_objects = read_existing_dataset(filename, label)
                 print(f"Found {len(pyg_objects)} in {label}")
 
                 serialized_pyg = _serialize_pyg_list(pyg_objects)
