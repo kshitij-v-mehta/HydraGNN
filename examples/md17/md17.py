@@ -1,7 +1,9 @@
 import os
+import sys
 import pdb
 import json
 import torch
+import torch.distributed as dist
 import torch_geometric
 from torch_geometric.transforms import AddLaplacianEigenvectorPE
 import argparse
@@ -132,7 +134,15 @@ def main(mpnn_type=None, global_attn_engine=None, global_attn_type=None):
         config["NeuralNetwork"],
         log_name,
         verbosity,
+        create_plots=False,
+        compute_grad_energy=config["NeuralNetwork"]["Architecture"].get(
+            "enable_interatomic_potential", False
+        ),
     )
+    if writer is not None:
+        writer.close()
+
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":
@@ -161,4 +171,10 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    main(mpnn_type=args.mpnn_type)
+    main(
+        mpnn_type=args.mpnn_type,
+        global_attn_engine=args.global_attn_engine,
+        global_attn_type=args.global_attn_type,
+    )
+
+    sys.exit(0)

@@ -27,13 +27,43 @@ import os
 
 from torch.profiler import record_function
 
-from hydragnn.utils.distributed import get_comm_size_and_rank
+from hydragnn.utils.distributed import get_comm_size_and_rank, print_peak_memory
 import torch.distributed as dist
 import pickle
 
 import hydragnn.utils.profiling_and_tracing.tracer as tr
 import time
 from mpi4py import MPI
+from contextlib import nullcontext
+
+try:
+    from torch.amp import GradScaler
+except (ImportError, ModuleNotFoundError):
+    GradScaler = None
+
+
+def get_autocast_and_scaler(bf16):
+    use_bf16 = bf16 and (
+        (torch.cuda.is_available() and torch.cuda.get_device_properties(0).major >= 7)
+        or (hasattr(torch, "xpu") and torch.xpu.is_available())
+    )
+    print("get_autocast_and_scaler use_bf16: ", use_bf16)
+
+    ## No need to use GradScaler for bf16
+    scaler = (
+        GradScaler(str(get_device()), enabled=use_bf16)
+        if GradScaler and False
+        else None
+    )
+
+    device = str(get_device())
+    autocast = (
+        torch.autocast(device_type=device, dtype=torch.bfloat16)
+        if use_bf16
+        else nullcontext()
+    )
+
+    return autocast, scaler
 
 
 def get_nbatch(loader):
@@ -65,6 +95,7 @@ def train_validate_test(
     create_plots=False,
     use_deepspeed=False,
     compute_grad_energy=False,
+    bf16=False,
 ):
     num_epoch = config["Training"]["num_epoch"]
     EarlyStop = (
@@ -170,6 +201,7 @@ def train_validate_test(
                 profiler=prof,
                 use_deepspeed=use_deepspeed,
                 compute_grad_energy=compute_grad_energy,
+                bf16=bf16,
             )
             tr.stop("train")
             tr.disable()
@@ -185,6 +217,7 @@ def train_validate_test(
             verbosity,
             reduce_ranks=True,
             compute_grad_energy=compute_grad_energy,
+            bf16=bf16,
         )
         test_loss, test_taskserr, true_values, predicted_values = test(
             test_loader,
@@ -193,6 +226,7 @@ def train_validate_test(
             reduce_ranks=True,
             return_samples=plot_hist_solution,
             compute_grad_energy=compute_grad_energy,
+            bf16=bf16,
         )
         scheduler.step(val_loss)
         if writer is not None:
@@ -456,9 +490,12 @@ def train(
     profiler=None,
     use_deepspeed=False,
     compute_grad_energy=False,
+    bf16=False,
 ):
     if profiler is None:
         profiler = Profiler()
+
+    autocast_context, scaler = get_autocast_and_scaler(bf16)
 
     total_error = torch.tensor(0.0, device=get_device())
     tasks_error = torch.zeros(model.module.num_heads, device=get_device())
@@ -504,8 +541,9 @@ def train(
                 opt.zero_grad()
         tr.stop("zero_grad")
         tr.start("get_head_indices")
-        with record_function("get_head_indices"):
-            head_index = get_head_indices(model, data)
+        if not compute_grad_energy:
+            with record_function("get_head_indices"):
+                head_index = get_head_indices(model, data)
         tr.stop("get_head_indices")
         tr.start("forward", **syncopt)
         with record_function("forward"):
@@ -516,11 +554,15 @@ def train(
                 tr.stop("h2d", **syncopt)
             if compute_grad_energy:  # for force and energy prediction
                 data.pos.requires_grad = True
-                pred = model(data)
-                loss, tasks_loss = model.module.energy_force_loss(pred, data)
+                # Perform forward pass and backward pass under autocast
+                with autocast_context:
+                    pred = model(data)
+                    loss, tasks_loss = model.module.energy_force_loss(pred, data)
             else:
-                pred = model(data)
-                loss, tasks_loss = model.module.loss(pred, data.y, head_index)
+                # Perform forward pass and backward pass under autocast
+                with autocast_context:
+                    pred = model(data)
+                    loss, tasks_loss = model.module.loss(pred, data.y, head_index)
             if trace_level > 0:
                 tr.start("forward_sync", **syncopt)
                 MPI.COMM_WORLD.Barrier()
@@ -531,7 +573,10 @@ def train(
             if use_deepspeed:
                 model.backward(loss)
             else:
-                loss.backward()
+                if scaler is not None:
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
             if trace_level > 0:
                 tr.start("backward_sync", **syncopt)
                 MPI.COMM_WORLD.Barrier()
@@ -542,8 +587,12 @@ def train(
         if use_deepspeed:
             model.step()
         else:
-            opt.step()
-        # print_peak_memory(verbosity, "Max memory allocated after optimizer step")
+            if scaler is not None:
+                scaler.step(opt)
+                scaler.update()
+            else:
+                opt.step()
+        print_peak_memory(verbosity, "Max memory allocated after optimizer step")
         tr.stop("opt_step", **syncopt)
         profiler.step()
         with torch.no_grad():
@@ -564,11 +613,23 @@ def train(
 
     train_error = total_error / num_samples_local
     tasks_error = tasks_error / num_samples_local
+
+    train_error = reduce_values_ranks(train_error)
+    tasks_error = reduce_values_ranks(tasks_error)
+
     return train_error, tasks_error
 
 
 @torch.no_grad()
-def validate(loader, model, verbosity, reduce_ranks=True, compute_grad_energy=False):
+def validate(
+    loader,
+    model,
+    verbosity,
+    reduce_ranks=True,
+    compute_grad_energy=False,
+    bf16=False,
+):
+    autocast_context, scaler = get_autocast_and_scaler(bf16)
 
     total_error = torch.tensor(0.0, device=get_device())
     tasks_error = torch.zeros(model.module.num_heads, device=get_device())
@@ -590,16 +651,18 @@ def validate(loader, model, verbosity, reduce_ranks=True, compute_grad_energy=Fa
             break
         if use_ddstore:
             loader.dataset.ddstore.epoch_end()
-        head_index = get_head_indices(model, data)
         data = data.to(get_device())
         if compute_grad_energy:  # for force and energy prediction
             with torch.enable_grad():
                 data.pos.requires_grad = True
-                pred = model(data)
-                error, tasks_loss = model.module.energy_force_loss(pred, data)
+                with autocast_context:
+                    pred = model(data)
+                    error, tasks_loss = model.module.energy_force_loss(pred, data)
         else:
-            pred = model(data)
-            error, tasks_loss = model.module.loss(pred, data.y, head_index)
+            with autocast_context:
+                head_index = get_head_indices(model, data)
+                pred = model(data)
+                error, tasks_loss = model.module.loss(pred, data.y, head_index)
         total_error += error * data.num_graphs
         num_samples_local += data.num_graphs
         for itask in range(len(tasks_loss)):
@@ -625,7 +688,9 @@ def test(
     reduce_ranks=True,
     return_samples=True,
     compute_grad_energy=False,
+    bf16=False,
 ):
+    autocast_context, scaler = get_autocast_and_scaler(bf16)
 
     total_error = torch.tensor(0.0, device=get_device())
     tasks_error = torch.zeros(model.module.num_heads, device=get_device())
@@ -650,16 +715,18 @@ def test(
             break
         if use_ddstore:
             loader.dataset.ddstore.epoch_end()
-        head_index = get_head_indices(model, data)
         data = data.to(get_device())
         if compute_grad_energy:  # for force and energy prediction
             with torch.enable_grad():
                 data.pos.requires_grad = True
-                pred = model(data)
-                error, tasks_loss = model.module.energy_force_loss(pred, data)
+                with autocast_context:
+                    pred = model(data)
+                    error, tasks_loss = model.module.energy_force_loss(pred, data)
         else:
-            pred = model(data)
-            error, tasks_loss = model.module.loss(pred, data.y, head_index)
+            with autocast_context:
+                head_index = get_head_indices(model, data)
+                pred = model(data)
+                error, tasks_loss = model.module.loss(pred, data.y, head_index)
         ## FIXME: temporary
         if int(os.getenv("HYDRAGNN_DUMP_TESTDATA", "0")) == 1:
             if model.module.var_output:

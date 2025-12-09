@@ -227,5 +227,8 @@ if __name__ == "__main__":
 
     hydragnn.utils.model.save_model(model, optimizer, log_name)
     hydragnn.utils.profiling_and_tracing.print_timers(verbosity)
+    if writer is not None:
+        writer.close()
 
+    dist.destroy_process_group()
     sys.exit(0)

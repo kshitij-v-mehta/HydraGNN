@@ -14,6 +14,9 @@ import re
 
 import torch
 import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision
+from torch.distributed.fsdp import ShardingStrategy
 
 from hydragnn.utils.print.print_utils import print_distributed
 
@@ -26,7 +29,7 @@ import subprocess
 deepspeed_available = True
 try:
     import deepspeed
-except ImportError:
+except:
     deepspeed_available = False
 
 
@@ -326,7 +329,11 @@ def is_model_distributed(model):
 
 
 def get_distributed_model(
-    model, verbosity=0, sync_batch_norm=False, find_unused_parameters=False
+    model,
+    verbosity=0,
+    sync_batch_norm=False,
+    find_unused_parameters=False,
+    enhanced_model=False,
 ):
     device_name = get_device_name(verbosity_level=verbosity)
     print(
@@ -338,23 +345,52 @@ def get_distributed_model(
 
     if dist.is_initialized():
         if device_name == "cpu":
-            model = torch.nn.parallel.DistributedDataParallel(
-                model, find_unused_parameters=find_unused_parameters
-            )
+            ddp_kwargs = {
+                "find_unused_parameters": find_unused_parameters,
+                "gradient_as_bucket_view": not enhanced_model,
+            }
+            # Add static_graph=False for enhanced models with dynamic computation
+            if enhanced_model:
+                ddp_kwargs["static_graph"] = False
         else:
             if sync_batch_norm:
                 model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
             device = get_device_from_name(device_name)
-            model = torch.nn.parallel.DistributedDataParallel(
-                model,
-                device_ids=[device],
-                find_unused_parameters=find_unused_parameters,
-            )
+
+            ddp_kwargs = {
+                "device_ids": [device],
+                "find_unused_parameters": find_unused_parameters,
+                "gradient_as_bucket_view": not enhanced_model,
+            }
+            # Add static_graph=False for enhanced models with dynamic computation
+            if enhanced_model:
+                ddp_kwargs["static_graph"] = False
+
+        ## check if FSDP is to be used
+        use_fsdp = bool(int(os.getenv("HYDRAGNN_USE_FSDP", "0")))
+        ## List of ShardingStrategy: FULL_SHARD, SHARD_GRAD_OP, NO_SHARD, HYBRID_SHARD, HYBRID_SHARD_ZERO2
+        fsdp_strategy = os.getenv("HYDRAGNN_FSDP_STRATEGY", "FULL_SHARD")
+        sharding_strategy = eval(f"ShardingStrategy.{fsdp_strategy}")
+        print("Using FSDP:", use_fsdp, "Sharding:", sharding_strategy)
+
+        if use_fsdp:
+            model = FSDP(model, sharding_strategy=sharding_strategy)
+        else:
+            model = DDP(model, **ddp_kwargs)
+
     return model
 
 
 def distributed_model_wrapper(
-    model, optimizer, verbosity=0, sync_batch_norm=False, find_unused_parameters=False
+    model,
+    optimizer,
+    verbosity=0,
+    sync_batch_norm=False,
+    find_unused_parameters=False,
+    use_deepspeed=False,
+    config=None,
+    zero_opt=False,
+    bf16=False,
 ):
 
     if hasattr(torch, "xpu") and torch.xpu.is_available():
@@ -367,12 +403,61 @@ def distributed_model_wrapper(
             verbosity, "CPUs, NVIDIA, and AMD GPUs do not need optimize wrapper"
         )
 
-    model = get_distributed_model(
-        model,
-        verbosity=verbosity,
-        sync_batch_norm=sync_batch_norm,
-        find_unused_parameters=find_unused_parameters,
-    )
+    if use_deepspeed:
+        assert deepspeed_available, "deepspeed package not available"
+        assert config is not None, "config is required for deepspeed"
+
+        # create temporary deepspeed configuration
+        from hydragnn.utils.input_config_parsing import parse_deepspeed_config
+
+        ds_config = parse_deepspeed_config(config)
+
+        if zero_opt:
+            ds_config["zero_optimization"] = {"stage": 1}
+
+        if bf16:
+            ## We should choose only one of the following two
+            ds_config["bf16"] = {"enabled": False}
+            ds_config["torch_autocast"] = {
+                "enabled": True,
+                "dtype": "bfloat16",
+                "lower_precision_safe_modules": ["torch.nn.Linear", "torch.nn.Conv2d"],
+            }
+
+        # create deepspeed model
+        # FIXME: need to check if it also works on ALCF-Aurora with Intel GPUs
+        model, optimizer, _, _ = deepspeed.initialize(
+            args=get_deepspeed_init_args(),
+            model=model,
+            config=ds_config,
+            dist_init_required=False,
+            optimizer=optimizer,  # optimizer is managed by deepspeed
+        )  # scheduler is not managed by deepspeed because it is per-epoch instead of per-step
+    else:
+        # Auto-detect EnhancedModelWrapper and enable find_unused_parameters to avoid DDP gradient stride warnings
+        enhanced_model_detected = (
+            hasattr(model, "__class__")
+            and "EnhancedModelWrapper" in model.__class__.__name__
+        )
+
+        if enhanced_model_detected:
+            print_distributed(
+                verbosity,
+                f"EnhancedModelWrapper detected: {model.__class__.__name__}",
+            )
+            print_distributed(
+                verbosity,
+                "Applying DDP optimizations: find_unused_parameters=True, gradient_as_bucket_view=False",
+            )
+            find_unused_parameters = True
+
+        model = get_distributed_model(
+            model,
+            verbosity=verbosity,
+            sync_batch_norm=sync_batch_norm,
+            find_unused_parameters=find_unused_parameters,
+            enhanced_model=enhanced_model_detected,
+        )
 
     return model, optimizer
 
@@ -383,7 +468,15 @@ def print_peak_memory(verbosity_level, prefix):
         device = get_device()
         print_distributed(
             verbosity_level,
-            f"{prefix}: {torch.cuda.max_memory_allocated(device) // 1e6}MB ",
+            f"{prefix}: {torch.cuda.max_memory_allocated(device)/1e9} GB",
+            f"{torch.cuda.max_memory_reserved()/1e9} GB",
+        )
+    elif hasattr(torch, "xpu") and torch.xpu.is_available():
+        device = get_device()
+        print_distributed(
+            verbosity_level,
+            f"{prefix}: {torch.xpu.max_memory_allocated(device)/1e9} GB",
+            f"{torch.xpu.max_memory_reserved()/1e9} GB",
         )
 
 
