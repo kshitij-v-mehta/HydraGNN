@@ -86,45 +86,42 @@ def _write_new_adios_schema(
     
     # Compute local graph offsets within the global data array
     local_offsets = np.zeros(local_count, dtype=np.int64)
-    if local_count > 0:
-        local_offsets[0] = byte_offset
-        for i in range(1, local_count):
-            local_offsets[i] = local_offsets[i-1] + local_sizes[i-1]
+    assert local_count > 0
+    local_offsets[0] = byte_offset
+    for i in range(1, local_count):
+        local_offsets[i] = local_offsets[i-1] + local_sizes[i-1]
     
     # Write scalar metadata (only rank 0, but all ranks must participate)
-    if rank == 0:
-        stream.write(f"{label}/ndata", np.array([total_graphs], dtype=np.int64))
+    stream.write(f"{label}/ndata", np.array([total_graphs], dtype=np.int64))
     
     # Write graph_data as a global distributed array
     # Each rank writes its portion: shape=[total], start=[byte_offset], count=[local_bytes]
-    if total_bytes > 0:
-        stream.write(
-            f"{label}/graph_data",
-            local_data,
-            shape=[total_bytes],
-            start=[byte_offset],
-            count=[local_total_bytes]
-        )
+    stream.write(
+        f"{label}/graph_data",
+        local_data,
+        shape=[total_bytes],
+        start=[byte_offset],
+        count=[local_total_bytes]
+    )
     
     # Write graph_offsets as a global distributed array
     # Each rank writes its portion: shape=[total_graphs], start=[graph_offset], count=[local_count]
-    if total_graphs > 0:
-        stream.write(
-            f"{label}/graph_offsets",
-            local_offsets,
-            shape=[total_graphs],
-            start=[graph_offset],
-            count=[local_count]
-        )
-        
-        # Write graph_sizes as a global distributed array
-        stream.write(
-            f"{label}/graph_sizes",
-            local_sizes,
-            shape=[total_graphs],
-            start=[graph_offset],
-            count=[local_count]
-        )
+    stream.write(
+        f"{label}/graph_offsets",
+        local_offsets,
+        shape=[total_graphs],
+        start=[graph_offset],
+        count=[local_count]
+    )
+    
+    # Write graph_sizes as a global distributed array
+    stream.write(
+        f"{label}/graph_sizes",
+        local_sizes,
+        shape=[total_graphs],
+        start=[graph_offset],
+        count=[local_count]
+    )
     
     if rank == 0:
         print(f"Successfully wrote {total_graphs} graphs ({total_bytes} bytes) from {size} ranks to {filename}")
