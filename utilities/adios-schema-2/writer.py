@@ -99,7 +99,7 @@ def _write_new_adios_schema(
     # Each rank writes its portion: shape=[total], start=[byte_offset], count=[local_bytes]
     if total_bytes > 0:
         stream.write(
-            "graph_data",
+            f"{label}/graph_data",
             local_data,
             shape=[total_bytes],
             start=[byte_offset],
@@ -110,7 +110,7 @@ def _write_new_adios_schema(
     # Each rank writes its portion: shape=[total_graphs], start=[graph_offset], count=[local_count]
     if total_graphs > 0:
         stream.write(
-            "graph_offsets",
+            f"{label}/graph_offsets",
             local_offsets,
             shape=[total_graphs],
             start=[graph_offset],
@@ -119,7 +119,7 @@ def _write_new_adios_schema(
         
         # Write graph_sizes as a global distributed array
         stream.write(
-            "graph_sizes",
+            f"{label}/graph_sizes",
             local_sizes,
             shape=[total_graphs],
             start=[graph_offset],
