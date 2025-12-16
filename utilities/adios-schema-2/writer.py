@@ -1,4 +1,4 @@
-import os, sys, pickle
+import os, sys, pickle, time
 from typing import List
 from mpi4py import MPI
 import numpy as np
@@ -140,11 +140,16 @@ if __name__ == '__main__':
 
     total_graphs = 0
     
+    read_time = 0.0
     with Stream(out_filename, "w", comm) as stream:
         for _ in stream.steps(1):
             for label in ("trainset", "testset", "valset"):
+                t1 = time.time()
+                if rank == 0: print(f"Reading {label}")
                 pyg_objects = read_existing_dataset(filename, label)
                 print(f"Found {len(pyg_objects)} in {label}")
+                t2 = time.time()
+                read_time += t2-t1
 
                 serialized_pyg = _serialize_pyg_list(pyg_objects)
                 total_label_graphs = _write_new_adios_schema(serialized_pyg, label, stream)
@@ -152,4 +157,7 @@ if __name__ == '__main__':
 
             if rank == 0:
                 stream.write(f"ndata", np.array([total_graphs], dtype=np.int64))
+
+    if rank==0:
+        print(f"Reading time: {read_time} seconds")
 

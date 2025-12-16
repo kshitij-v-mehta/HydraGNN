@@ -1,4 +1,4 @@
-import os, sys, pickle
+import os, sys, pickle, time, traceback
 import numpy as np
 from torch_geometric.data import Data
 from typing import List
@@ -99,14 +99,25 @@ def _read_serialized_data(
 
 #----------------------------------------------------------------------------#
 if __name__ == '__main__':
-    assert len(sys.argv) == 2, f"Run as {sys.argv[0]} <adios-file>"
-    filename = sys.argv[1]
+    try:
+        assert len(sys.argv) == 2, f"Run as {sys.argv[0]} <adios-file>"
+        filename = sys.argv[1]
 
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    
-    with FileReader(filename, comm) as reader:
-        for label in ("trainset", "valset", "testset"):
-            pyg_obj_list = _read_serialized_data(reader, label)
-            print(f"Rank {rank} read {len(pyg_obj_list)} for {label}")
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+ 
+        read_time = 0.0   
+        with FileReader(filename, comm) as reader:
+            for label in ("trainset", "valset", "testset"):
+                t1 = time.time()
+                pyg_obj_list = _read_serialized_data(reader, label)
+                t2 = time.time()
+                read_time += t2-t1
+                print(f"Rank {rank} read {len(pyg_obj_list)} for {label}")
+
+        if rank==0:
+            print(f"read time: {read_time} seconds")
+
+    except Exception as e:
+        print(traceback.format_exc())
 
