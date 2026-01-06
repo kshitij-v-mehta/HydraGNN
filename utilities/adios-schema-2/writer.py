@@ -6,6 +6,9 @@ from torch_geometric.data import Data
 from hydragnn.utils.datasets import AdiosDataset
 from hydragnn.utils.distributed import nsplit
 from adios2 import Stream
+from concurrent.futures import ProcessPoolExecutor
+# from hydragnn.utils.print.print_utils import log, log0
+from logger import logger
 
 
 def read_existing_dataset(filename, label, comm=MPI.COMM_WORLD):
@@ -29,9 +32,15 @@ def _serialize_pyg_single(data: Data) -> np.ndarray:
 
 def _serialize_pyg_list(data_list: List[Data]):
     local_serialized = []
-    for data in data_list:
-        serialized = _serialize_pyg_single(data)
-        local_serialized.append(serialized)
+    # for data in data_list:
+    #     serialized = _serialize_pyg_single(data)
+    #     local_serialized.append(serialized)
+
+    with ProcessPoolExecutor() as executor:
+        iterator = executor.map(_serialize_pyg_single, data_list)
+
+        for result in iterator:
+            local_serialized.append(result)
 
     return local_serialized
 
@@ -146,6 +155,7 @@ if __name__ == '__main__':
             for label in ("trainset", "testset", "valset"):
                 t1 = time.time()
                 if rank == 0: print(f"Reading {label}")
+                logger.debug(f"Reading {label}")
                 pyg_objects = read_existing_dataset(filename, label)
                 print(f"Found {len(pyg_objects)} in {label}")
                 t2 = time.time()
