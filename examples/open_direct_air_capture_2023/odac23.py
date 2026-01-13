@@ -1,4 +1,4 @@
-import os, random, torch, glob, sys, pickle, pdb
+import os, random, torch, glob, sys, pickle, time, pdb
 import numpy as np
 from mpi4py import MPI
 from yaml import full_load
@@ -15,7 +15,6 @@ from hydragnn.preprocess.graph_samples_checks_and_updates import (
     gather_deg,
 )
 from hydragnn.utils.distributed import nsplit
-from utils import balance_load
 
 
 # transform_coordinates = Spherical(norm=False, cat=False)
@@ -110,34 +109,24 @@ class ODAC2023(AbstractBaseDataset):
             self.rank = torch.distributed.get_rank()
         self.comm = comm
 
-        # Parallelizing over data files for training data. For val set, we parallelize over each molecules.
-        dataset_list = self._get_datasets_assigned_to_me(dirpath, data_type)
+        # get the list of all extxyz files
+        total_file_list = self._get_file_list(dirpath, data_type)
 
-        for dataset_index, dataset_dict in enumerate(dataset_list):
-            fullpath = dataset_dict["dataset_fullpath"]
+        # Parallelize amongst all ranks
+        rx = list(nsplit(list(range(len(total_file_list))), self.world_size))[self.rank]
+
+        for index in rx:
             try:
-                dataset = ExtendedXYZDataset(extxyz_filename=fullpath)
-            except ValueError as e:
-                print(f"{fullpath} not a valid ase lmdb dataset. Ignoring ...")
+                dataset = ExtendedXYZDataset(total_file_list[index])
+            except Exception as e:
+                print(f"Encountered {e} for {total_file_list[index]}. Ignoring ...")
                 continue
 
-            if data_type == "train":
-                rx = list(range(len(dataset)))
-            else:
-                rx = list(nsplit(list(range(len(dataset))), self.world_size))[self.rank]
+            # if self.rank == 0:
+            print(f"{total_file_list[index]} has {len(dataset)} samples")
 
-            print(
-                f"Rank: {self.rank}, dataname: {fullpath}, data_type: {data_type}, num_samples: {len(dataset)}, len(rx): {len(rx)}"
-            )
-
-            # for index in iterate_tqdm(
-            #     rx,
-            #     verbosity_level=2,
-            #     desc=f"Rank{self.rank} Dataset {dataset_index}/{len(dataset_list)}",
-            # ):
-
-            for index in rx:
-                self._create_pytorch_data_object(dataset, index)
+            for i in range(len(dataset)):
+                self._create_pytorch_data_object(dataset, i)
 
         print(
             self.rank,
@@ -148,42 +137,20 @@ class ODAC2023(AbstractBaseDataset):
 
         random.shuffle(self.dataset)
 
-    def _get_datasets_assigned_to_me(self, dirpath, data_type):
-        datasets_info = []
 
-        # get the list of ase lmdb files
+    def _get_file_list(self, dirpath, data_type):
+        """Get a list of all input extxyz files"""
         total_file_list = None
         if self.rank == 0:
             total_file_list = glob.glob(
                 os.path.join(dirpath, data_type, "**/*.extxyz"), recursive=True
             )
+            print(f"Found {len(total_file_list)} extxyz files for {data_type}")
+
         total_file_list = self.comm.bcast(total_file_list, root=0)
+        total_file_list.sort()
+        return total_file_list
 
-        # evenly distribute amongst all ranks to get num samples
-        rx = list(nsplit(total_file_list, self.world_size))[self.rank]
-        datasets = rx
-
-        # Get num samples for all datasets assigned to this process
-        for d in iterate_tqdm(datasets, verbosity_level=2, desc="Data Parsing"):
-            fullpath = os.path.join(dirpath, data_type, d)
-            try:
-                dataset = ExtendedXYZDataset(extxyz_filename=fullpath)
-            except ValueError as e:
-                print(f"{fullpath} is not a valid Extended XYZ dataset. Ignoring ...")
-                continue
-
-            num_samples = len(dataset)
-            datasets_info.append(
-                {"dataset_fullpath": fullpath, "num_samples": num_samples}
-            )
-
-        # All gather so everyone has all num samples information
-        _all_datasets_info = self.comm.allgather(datasets_info)
-        all_datasets_info = [item for sublist in _all_datasets_info for item in sublist]
-
-        # Call workload distributor to assign datasets to processes
-        my_datasets = balance_load(all_datasets_info, self.world_size, self.rank)
-        return my_datasets
 
     def _create_pytorch_data_object(self, dataset, index):
         try:
