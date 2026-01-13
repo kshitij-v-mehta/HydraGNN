@@ -169,12 +169,12 @@ class ODAC2023(AbstractBaseDataset):
             forces = torch.tensor(dataset.get(index).get_forces(), dtype=torch.float32)
 
             chemical_formula = dataset.get(index).get_chemical_formula()
-
+            
             cell = None
             try:
-                cell = torch.tensor(
-                    dataset.get(index).get_cell(), dtype=torch.float32
-                ).view(3, 3)
+                # cell = torch.tensor(
+                #     dataset.get(index).get_cell(), dtype=torch.float32
+                # ).view(3, 3)
                 cell = torch.from_numpy(np.asarray(dataset.get(index).get_cell())).to(
                     torch.float32
                 )  # dtype conversion in-place
@@ -185,6 +185,7 @@ class ODAC2023(AbstractBaseDataset):
                     flush=True,
                 )
 
+            
             pbc = None
             try:
                 pbc = pbc_as_tensor(dataset.get(index).get_pbc())
