@@ -55,7 +55,9 @@ class ExtendedXYZDataset(Dataset):
         """Reads all structures from all .extxyz files and stores them in self.structures"""
         if not os.path.isfile(self.extxyz_filename):
             raise FileNotFoundError(f"File not found: {self.extxyz_filename}")
-        frames = read(self.extxyz_filename, index=":", parallel=False)  # Read all structures in file
+        frames = read(
+            self.extxyz_filename, index=":", parallel=False
+        )  # Read all structures in file
         self.structures.extend(frames)
 
     def len(self):
@@ -71,7 +73,7 @@ def file_reader(total_file_list, rx, dirpath, q):
     for index in rx:
         filepath = total_file_list[index]
         fileid = filepath.replace(dirpath, "")
-        fileid = fileid.replace("/","_")
+        fileid = fileid.replace("/", "_")
         newpath = os.path.join("/mnt/bb/kmehta", fileid)
         shutil.copyfile(filepath, newpath)
         q.put(newpath)
@@ -128,7 +130,15 @@ class ODAC2023(AbstractBaseDataset):
         rx = list(nsplit(list(range(len(total_file_list))), self.world_size))[self.rank]
 
         q = queue.Queue(maxsize=10)
-        t = threading.Thread(target=file_reader, args=(total_file_list, rx, dirpath, q,))
+        t = threading.Thread(
+            target=file_reader,
+            args=(
+                total_file_list,
+                rx,
+                dirpath,
+                q,
+            ),
+        )
         t.start()
 
         # for index in rx:
@@ -165,7 +175,6 @@ class ODAC2023(AbstractBaseDataset):
 
         random.shuffle(self.dataset)
 
-
     def _get_file_list(self, dirpath, data_type):
         """Get a list of all input extxyz files"""
         total_file_list = None
@@ -178,7 +187,6 @@ class ODAC2023(AbstractBaseDataset):
         total_file_list = self.comm.bcast(total_file_list, root=0)
         total_file_list.sort()
         return total_file_list
-
 
     def _create_pytorch_data_object(self, dataset, index):
         try:
@@ -197,7 +205,7 @@ class ODAC2023(AbstractBaseDataset):
             forces = torch.tensor(dataset.get(index).get_forces(), dtype=torch.float32)
 
             chemical_formula = dataset.get(index).get_chemical_formula()
-            
+
             cell = None
             try:
                 # cell = torch.tensor(
@@ -264,7 +272,9 @@ class ODAC2023(AbstractBaseDataset):
                     data_object = self.radius_graph_pbc(data_object)
                     data_object = transform_coordinates_pbc(data_object)
                 except:
-                    print(f"Structure could not successfully apply one or both of the pbc radius graph and positional transform.\n{traceback.format_exc()}")
+                    print(
+                        f"Structure could not successfully apply one or both of the pbc radius graph and positional transform.\n{traceback.format_exc()}"
+                    )
                     data_object = self.radius_graph(data_object)
                     data_object = transform_coordinates(data_object)
             else:
@@ -291,7 +301,7 @@ class ODAC2023(AbstractBaseDataset):
                     f"L2-norm of force tensor is {data_object.forces.norm()} and exceeds threshold {self.forces_norm_threshold} - atomistic structure: {chemical_formula}",
                     flush=True,
                 )
-            
+
         except Exception as e:
             print(f"Rank {self.rank} reading - exception: ", e)
 

@@ -60,12 +60,8 @@ if __name__ == "__main__":
         action="store_true",
         help="preprocess only (no training)",
     )
-    parser.add_argument(
-        "--stagedb",
-        action="store_true",
-        help="An additional step in pre-processing. Stage samples to db and then separately convert "
-        "them to ADIOS by running preonly with the stagedb option.",
-    )
+    parser.add_argument("--file_cache", default="/tmp/",
+        help="A temporary, fast disk/memory area that will be used internally to cache input files, Used when --preonly is provided."
     parser.add_argument(
         "--inputfile", help="input file", type=str, default="odac23_energy.json"
     )
