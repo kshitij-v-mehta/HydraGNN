@@ -55,7 +55,7 @@ class ExtendedXYZDataset(Dataset):
         """Reads all structures from all .extxyz files and stores them in self.structures"""
         if not os.path.isfile(self.extxyz_filename):
             raise FileNotFoundError(f"File not found: {self.extxyz_filename}")
-        frames = read(self.extxyz_filename, index=":")  # Read all structures in file
+        frames = read(self.extxyz_filename, index=":", parallel=False)  # Read all structures in file
         self.structures.extend(frames)
 
     def len(self):
