@@ -60,8 +60,11 @@ if __name__ == "__main__":
         action="store_true",
         help="preprocess only (no training)",
     )
-    parser.add_argument("--file_cache", default="/tmp/",
-        help="A temporary, fast disk/memory area that will be used internally to cache input files, Used when --preonly is provided."
+    parser.add_argument(
+        "--file_cache",
+        default="/tmp/",
+        help="A temporary, fast disk/memory area that will be used internally to cache input files, Used when --preonly is provided.",
+    )
     parser.add_argument(
         "--inputfile", help="input file", type=str, default="odac23_energy.json"
     )
@@ -168,7 +171,8 @@ if __name__ == "__main__":
             # graphgps_transform=graphgps_transform,
             graphgps_transform=None,
             energy_per_atom=args.energy_per_atom,
-            dist=True
+            file_cache=args.file_cache,
+            dist=True,
         )
         ## This is a local split
         trainset, valset1, valset2 = split_dataset(
@@ -184,7 +188,8 @@ if __name__ == "__main__":
             # graphgps_transform=graphgps_transform,
             graphgps_transform=None,
             energy_per_atom=args.energy_per_atom,
-            dist=True
+            file_cache=args.file_cache,
+            dist=True,
         )
         ## Need as a list
         testset = testset[:]

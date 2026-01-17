@@ -69,12 +69,12 @@ class ExtendedXYZDataset(Dataset):
         return atoms
 
 
-def file_reader(total_file_list, rx, dirpath, q):
+def file_reader(total_file_list, rx, dirpath, file_cache, q):
     for index in rx:
         filepath = total_file_list[index]
         fileid = filepath.replace(dirpath, "")
         fileid = fileid.replace("/", "_")
-        newpath = os.path.join("/mnt/bb/kmehta", fileid)
+        newpath = os.path.join(file_cache, fileid)
         shutil.copyfile(filepath, newpath)
         q.put(newpath)
     q.put(None)
@@ -88,6 +88,7 @@ class ODAC2023(AbstractBaseDataset):
         data_type,
         graphgps_transform=None,
         energy_per_atom=True,
+        file_cache="/tmp",
         dist=False,
         comm=MPI.COMM_WORLD,
     ):
@@ -136,6 +137,7 @@ class ODAC2023(AbstractBaseDataset):
                 total_file_list,
                 rx,
                 dirpath,
+                file_cache,
                 q,
             ),
         )
