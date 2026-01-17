@@ -1,4 +1,5 @@
-import os, random, torch, glob, sys, pickle, time, pdb
+import os, random, torch, glob, sys, pickle, shutil, traceback
+import queue, threading
 import numpy as np
 from mpi4py import MPI
 from yaml import full_load
@@ -66,6 +67,17 @@ class ExtendedXYZDataset(Dataset):
         return atoms
 
 
+def file_reader(total_file_list, rx, dirpath, q):
+    for index in rx:
+        filepath = total_file_list[index]
+        fileid = filepath.replace(dirpath, "")
+        fileid = fileid.replace("/","_")
+        newpath = os.path.join("/mnt/bb/kmehta", fileid)
+        shutil.copyfile(filepath, newpath)
+        q.put(newpath)
+    q.put(None)
+
+
 class ODAC2023(AbstractBaseDataset):
     def __init__(
         self,
@@ -115,19 +127,35 @@ class ODAC2023(AbstractBaseDataset):
         # Parallelize amongst all ranks
         rx = list(nsplit(list(range(len(total_file_list))), self.world_size))[self.rank]
 
-        for index in rx:
+        q = queue.Queue(maxsize=10)
+        t = threading.Thread(target=file_reader, args=(total_file_list, rx, dirpath, q,))
+        t.start()
+
+        # for index in rx:
+        while True:
+            dataitem = q.get()
+            q.task_done()
+
+            if dataitem == None:
+                print(f"Received terminate signal from file reader thread")
+                break
+
             try:
-                dataset = ExtendedXYZDataset(total_file_list[index])
+                # dataset = ExtendedXYZDataset(total_file_list[index])
+                dataset = ExtendedXYZDataset(dataitem)
             except Exception as e:
                 print(f"Encountered {e} for {total_file_list[index]}. Ignoring ...")
+                os.remove(dataitem)
                 continue
 
-            # if self.rank == 0:
-            print(f"{total_file_list[index]} has {len(dataset)} samples")
+            print(f"{dataitem} has {len(dataset)} samples")
 
             for i in range(len(dataset)):
                 self._create_pytorch_data_object(dataset, i)
 
+            os.remove(dataitem)
+
+        t.join()
         print(
             self.rank,
             f"Rank {self.rank} done creating pytorch data objects for {data_type}. Waiting on barrier.",
@@ -185,7 +213,6 @@ class ODAC2023(AbstractBaseDataset):
                     flush=True,
                 )
 
-            
             pbc = None
             try:
                 pbc = pbc_as_tensor(dataset.get(index).get_pbc())
@@ -237,10 +264,7 @@ class ODAC2023(AbstractBaseDataset):
                     data_object = self.radius_graph_pbc(data_object)
                     data_object = transform_coordinates_pbc(data_object)
                 except:
-                    print(
-                        f"Structure could not successfully apply one or both of the pbc radius graph and positional transform",
-                        flush=True,
-                    )
+                    print(f"Structure could not successfully apply one or both of the pbc radius graph and positional transform.\n{traceback.format_exc()}")
                     data_object = self.radius_graph(data_object)
                     data_object = transform_coordinates(data_object)
             else:
@@ -267,7 +291,7 @@ class ODAC2023(AbstractBaseDataset):
                     f"L2-norm of force tensor is {data_object.forces.norm()} and exceeds threshold {self.forces_norm_threshold} - atomistic structure: {chemical_formula}",
                     flush=True,
                 )
-
+            
         except Exception as e:
             print(f"Rank {self.rank} reading - exception: ", e)
 
