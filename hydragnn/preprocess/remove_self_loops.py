@@ -1,12 +1,18 @@
-import sys
-
+import os, sys
 from hydragnn.utils.datasets import AdiosDataset
 from hydragnn.utils.distributed import nsplit
 from adios2 import FileReader
 from hydragnn.utils.datasets import AdiosDataset, AdiosWriter
 from mpi4py import MPI
 import torch
-from logger import logger
+
+import logging
+
+logger = logging.getLogger("remove_self_loops")
+logging.basicConfig(
+    format="%(levelname)s %(asctime)s %(message)s",
+    level=os.environ.get("GPS_LOG_LEVEL", logging.DEBUG),
+)
 
 
 def should_skip_self_loops(data_object, context=""):
