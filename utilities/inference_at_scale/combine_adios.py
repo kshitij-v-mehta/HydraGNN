@@ -8,12 +8,12 @@ Usage:
     python combine_adios.py
 """
 
-import socket
+import glob, socket
 import numpy as np
 import adios2.bindings as adios2
 from tqdm import tqdm
 
-INPUT_FILES  = [f"/tmp/structures-{i}.bp" for i in range(8)]
+INPUT_FILES  = glob.glob("/tmp/structures-*.bp")
 OUTPUT_FILE  = f"/tmp/structures-all-{socket.gethostname()}.bp"
 
 VARS_1D_INT  = ["atom_types"]
