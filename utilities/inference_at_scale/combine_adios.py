@@ -8,11 +8,13 @@ Usage:
     python combine_adios.py
 """
 
+import socket
 import numpy as np
 import adios2.bindings as adios2
+from tqdm import tqdm
 
-INPUT_FILES  = [f"structures-{i}.bp" for i in range(4)]
-OUTPUT_FILE  = "structures-all.bp"
+INPUT_FILES  = [f"/tmp/structures-{i}.bp" for i in range(8)]
+OUTPUT_FILE  = f"/tmp/structures-all-{socket.gethostname()}.bp"
 
 VARS_1D_INT  = ["atom_types"]
 VARS_1D_FLT  = ["coordinates_x", "coordinates_y", "coordinates_z",
@@ -88,7 +90,7 @@ def combine(input_files, output_file):
     # --- Iterate over input files ---
     in_adios = adios2.ADIOS()
     in_io    = in_adios.DeclareIO("reader")
-    for input_file in input_files:
+    for input_file in tqdm(input_files, desc="8 files"):
         reader   = in_io.Open(input_file, adios2.Mode.Read)
 
         file_steps = 0
@@ -117,7 +119,7 @@ def verify(output_file):
         energy = np.zeros(1, dtype=np.float64)
         reader.Get(io.InquireVariable("formation_energy"), energy)
         reader.EndStep()
-        print(f"  [{step:3d}] natoms={N}  formation_energy={energy[0]:.3f} eV")
+        # print(f"  [{step:3d}] natoms={N}  formation_energy={energy[0]:.3f} eV")
         step += 1
 
     reader.Close()

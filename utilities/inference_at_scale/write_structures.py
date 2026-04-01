@@ -1,12 +1,14 @@
-import json
+import os, json
 import numpy as np
 import torch
 from mpi4py import MPI
 import adios2.bindings as adios2
 from torch_geometric.data import Data
 
-FLUSH_EVERY = 100   # flush to disk every N structures
-dirpath = "./"
+N_STRUCTURES = 50000   # number of atomistic structures per rank
+FLUSH_EVERY = 1000   # flush to disk every N structures
+# dirpath = "/mnt/bb/kmehta"
+dirpath = "/tmp"
 
 
 # --- Generate synthetic PyG structures ---
@@ -211,7 +213,6 @@ def read_json():
 
 if __name__ == "__main__":
     np.random.seed(42)
-    N_STRUCTURES = 2500   # not a clean multiple of FLUSH_EVERY to test final flush
 
     print(f"=== Writing {N_STRUCTURES} structures, flushing every {FLUSH_EVERY} ===\n")
     write_adios(N_STRUCTURES)
