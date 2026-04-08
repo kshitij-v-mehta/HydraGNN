@@ -374,7 +374,7 @@ def _energy_from_pred(pred) -> torch.Tensor:
 
 
 def _predict_branch_energy_forces(
-    model, data, branch_id: int
+    model, data, branch_id: int, retain_graph: bool = True
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     original_dataset_name = getattr(data, "dataset_name", None)
     data.dataset_name = _build_dataset_name(data, branch_id)
@@ -385,7 +385,7 @@ def _predict_branch_energy_forces(
         energy_pred,
         data.pos,
         grad_outputs=torch.ones_like(energy_pred),
-        retain_graph=True,
+        retain_graph=retain_graph,
         create_graph=False,
     )[0]
     forces_pred = -forces_pred
@@ -399,7 +399,7 @@ def _predict_branch_energy_forces(
 
 
 def _predict_branch_energy_forces_decoder(
-    model, data, encoded_feats, branch_id: int
+    model, data, encoded_feats, branch_id: int, retain_graph: bool = True
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Predict energy/forces for one branch using pre-computed encoder features."""
     original_dataset_name = getattr(data, "dataset_name", None)
@@ -411,7 +411,7 @@ def _predict_branch_energy_forces_decoder(
         energy_pred,
         data.pos,
         grad_outputs=torch.ones_like(energy_pred),
-        retain_graph=True,
+        retain_graph=retain_graph,
         create_graph=False,
     )[0]
     forces_pred = -forces_pred
@@ -980,8 +980,10 @@ def run_fused_inference(
                                     del e
                                     forces_preds.append(torch.zeros_like(batch.pos))
                                 else:
+                                    is_last = branch_id == num_branches - 1
                                     e, f = _predict_branch_energy_forces_decoder(
-                                        _base_model, batch, encoded_feats, branch_id
+                                        _base_model, batch, encoded_feats, branch_id,
+                                        retain_graph=not is_last,
                                     )
                                     energy_preds.append(e)
                                     forces_preds.append(f)
@@ -1020,8 +1022,10 @@ def run_fused_inference(
                                     del e
                                     forces_preds.append(torch.zeros_like(batch.pos))
                                 else:
+                                    is_last = branch_id == num_branches - 1
                                     e, f = _predict_branch_energy_forces(
-                                        model, batch, branch_id
+                                        model, batch, branch_id,
+                                        retain_graph=not is_last,
                                     )
                                     energy_preds.append(e)
                                     forces_preds.append(f)
@@ -1135,8 +1139,10 @@ def run_fused_inference(
                                     del e
                                     forces_preds.append(torch.zeros_like(batch.pos))
                                 else:
+                                    is_last = branch_id == num_branches - 1
                                     e, f = _predict_branch_energy_forces_decoder(
-                                        _base_model, batch, encoded_feats, branch_id
+                                        _base_model, batch, encoded_feats, branch_id,
+                                        retain_graph=not is_last,
                                     )
                                     energy_preds.append(e)
                                     forces_preds.append(f)
@@ -1175,8 +1181,10 @@ def run_fused_inference(
                                     del e
                                     forces_preds.append(torch.zeros_like(batch.pos))
                                 else:
+                                    is_last = branch_id == num_branches - 1
                                     e, f = _predict_branch_energy_forces(
-                                        model, batch, branch_id
+                                        model, batch, branch_id,
+                                        retain_graph=not is_last,
                                     )
                                     energy_preds.append(e)
                                     forces_preds.append(f)
