@@ -5,10 +5,10 @@ from mpi4py import MPI
 import adios2.bindings as adios2
 from torch_geometric.data import Data
 
-N_STRUCTURES = 50000   # number of atomistic structures per rank
-FLUSH_EVERY = 1000   # flush to disk every N structures
+N_STRUCTURES = 15000   # number of atomistic structures per rank
+FLUSH_EVERY = 50   # flush to disk every N structures
 # dirpath = "/mnt/bb/kmehta"
-dirpath = "/tmp"
+dirpath = "/mnt/bb/kmehta"
 
 
 # --- Generate synthetic PyG structures ---

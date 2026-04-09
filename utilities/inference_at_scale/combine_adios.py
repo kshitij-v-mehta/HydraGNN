@@ -12,9 +12,11 @@ import glob, socket
 import numpy as np
 import adios2.bindings as adios2
 from tqdm import tqdm
+from mpi4py import MPI
 
-INPUT_FILES  = glob.glob("/tmp/structures-*.bp")
-OUTPUT_FILE  = f"/tmp/structures-all-{socket.gethostname()}.bp"
+INPUT_FILES  = glob.glob("/mnt/bb/kmehta/structures-*.bp")
+# OUTPUT_FILE  = f"/mnt/bb/kmehta/structures-all-{socket.gethostname()}.bp"
+OUTPUT_FILE  = f"/mnt/bb/kmehta/structures-all-{MPI.COMM_WORLD.Get_rank()}.bp"
 
 VARS_1D_INT  = ["atom_types"]
 VARS_1D_FLT  = ["coordinates_x", "coordinates_y", "coordinates_z",
@@ -128,4 +130,4 @@ def verify(output_file):
 if __name__ == "__main__":
     print(f"Combining {len(INPUT_FILES)} files into {OUTPUT_FILE}\n")
     combine(INPUT_FILES, OUTPUT_FILE)
-    verify(OUTPUT_FILE)
+    # verify(OUTPUT_FILE)
