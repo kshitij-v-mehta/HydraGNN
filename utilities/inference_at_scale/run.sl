@@ -20,14 +20,14 @@ export PYTHONPATH=$PYTHONPATH:/lustre/orion/lrn070/world-shared/kmehta/hydragnn/
 
 set -x
 
-# Create PyG structures and write them to /tmp
-time srun -n8 -c7 python3 ./write_structures.py
+# Create PyG structures and write them to /mnt/bb
+time srun -n $((SLURM_JOB_NUM_NODES*8)) -c7 python3 ./write_structures.py
 
-# Combine the 8 files in /tmp into a new file in /tmp
-time srun -n1 -c56 python3 ./combine_adios.py
+# Combine the 8 files in /tmp into a new file in /mnt/bb/
+time srun -n $SLURM_JOB_NUM_NODES -N $SLURM_JOB_NUM_NODES python3 -u ./combine_adios.py
 
 # Copy the combined file to Orion
-time cp -r /tmp/structures-all-*.bp .
+time srun -n $SLURM_JOB_NUM_NODES -N $SLURM_JOB_NUM_NODES bash -c "cp -r /mnt/bb/kmehta/structures-all-*.bp ."
 
 set +x
 
