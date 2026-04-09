@@ -10,9 +10,16 @@
 #SBATCH --mail-type=END
 
 
+#SBCAST
+# sbcast $PWD/sbcast_dirs/logs /mnt/bb/$USER/.
+# sbcast $PWD/inference_fused_write_adios.py /mnt/bb/$USER/.
+# sbcast /lustre/orion/lrn070/world-shared/kmehta/hydragnn//hydragnn-libenv-installation/envs/hydragnn /mnt/bb/$USER/hydragnn-conda-env
+
+
 # Conda activate
 eval "$(conda shell.bash hook)"    # or: source /path/to/miniconda3/etc/profile.d/conda.sh
 source /lustre/orion/lrn070/world-shared/kmehta/hydragnn//hydragnn-libenv-installation/envs/hydragnn/bin/activate
+# source /mnt/bb/$USER/hydragnn-conda-env
 
 HYDRAGNN_ROOT=/lustre/orion/lrn070/world-shared/kmehta/hydragnn/hydragnn-fork
 EXAMPLE_DIR=$HYDRAGNN_ROOT/examples/multidataset_hpo_sc26
@@ -78,8 +85,10 @@ export BATCH_SIZE=50
 export NUM_SAMPLES=$((BATCH_SIZE*HYDRAGNN_MAX_NUM_BATCH*NUM_EPOCH))
 export INFER_PRECISION=fp64
 
+
 # Hard-coded training log directory to load for inference.
-CHECKPOINT_LOGDIR="./logs/multidataset_hpo-BEST6-fp64"
+# CHECKPOINT_LOGDIR="/mnt/bb/$USER/logs/multidataset_hpo-BEST6-fp64"
+CHECKPOINT_LOGDIR="$PWD/logs/multidataset_hpo-BEST6-fp64"
 
 if [ -z "$CHECKPOINT_LOGDIR" ] || [ ! -d "$CHECKPOINT_LOGDIR" ]; then
     echo "ERROR: Could not resolve CHECKPOINT_LOGDIR."
@@ -96,24 +105,35 @@ echo "Using checkpoint log dir: $CHECKPOINT_LOGDIR"
 echo "Precision:                $INFER_PRECISION"
 
 
+# Create local /tmp
 srun -N $SLURM_JOB_NUM_NODES -n $SLURM_JOB_NUM_NODES bash -c "mkdir -p /tmp/kmehta/" 
 srun -N $SLURM_JOB_NUM_NODES -n $SLURM_JOB_NUM_NODES bash -c "rm -rf  /tmp/kmehta/*" 
 
 
+# Fused inference flags
 _struct_args="--min_atoms 2 --max_atoms 500 --box_size 10.0"
 _fused_args="--fused_energy_grad --encoder_reuse --num_streams 1 --profile_stages"
 
-
-NVME_DIR=/tmp/$USER
-
+# Run inference
 cmd srun -N$SLURM_JOB_NUM_NODES -n$((SLURM_JOB_NUM_NODES*8)) -c7 --gpus-per-task=1 --gpu-bind=closest -l --kill-on-bad-exit=1 \
     --export=ALL,MASTER_ADDR=$MASTER_ADDR,MASTER_PORT=$MASTER_PORT,HYDRAGNN_MASTER_ADDR=$HYDRAGNN_MASTER_ADDR,HYDRAGNN_MASTER_PORT=$HYDRAGNN_MASTER_PORT,GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME,NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME \
-    python -u "./inference_fused_write_adios.py" \
+    python -u "inference_fused_write_adios.py" \
     --logdir "$CHECKPOINT_LOGDIR" \
     --num_structures 15050 \
     --batch_size $BATCH_SIZE \
     --precision $INFER_PRECISION \
-    --nvme_dir $NVME_DIR \
+    --nvme_dir /tmp/kmehta \
     ${_struct_args} \
     ${_fused_args}
+
+
+
+# Combine the 8 files in /tmp into a new file in /tmp
+time srun -n $SLURM_JOB_NUM_NODES -N $SLURM_JOB_NUM_NODES python3 -u ./combine_adios.py
+
+# Combine all files into a single tar file on each node
+time srun -n $SLURM_JOB_NUM_NODES -N $SLURM_JOB_NUM_NODES bash -c "cd /tmp/$USER && tar -cf inference_fused_results-\$SLURMD_NODENAME.tar inference_fused_results_all-*.bp"
+
+# Copy the combined file to Orion
+time srun -n $SLURM_JOB_NUM_NODES -N $SLURM_JOB_NUM_NODES bash -c "cp -r /tmp/$USER/inference_fused_results-\$SLURMD_NODENAME.tar ."
 
