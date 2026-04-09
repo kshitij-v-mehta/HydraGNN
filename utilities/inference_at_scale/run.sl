@@ -23,11 +23,14 @@ set -x
 # Create PyG structures and write them to /mnt/bb
 time srun -n $((SLURM_JOB_NUM_NODES*8)) -c7 python3 ./write_structures.py
 
-# Combine the 8 files in /tmp into a new file in /mnt/bb/
+## Combine the 8 files in /tmp into a new file in /mnt/bb/
 time srun -n $SLURM_JOB_NUM_NODES -N $SLURM_JOB_NUM_NODES python3 -u ./combine_adios.py
 
+# Combine all files into a single tar file on each node
+time srun -n $SLURM_JOB_NUM_NODES -N $SLURM_JOB_NUM_NODES bash -c "cd /mnt/bb/$USER && tar -cf structures-all-\$SLURMD_NODENAME.tar structures-all-*.bp"
+
 # Copy the combined file to Orion
-time srun -n $SLURM_JOB_NUM_NODES -N $SLURM_JOB_NUM_NODES bash -c "cp -r /mnt/bb/kmehta/structures-all-*.bp ."
+time srun -n $SLURM_JOB_NUM_NODES -N $SLURM_JOB_NUM_NODES bash -c "cp -r /mnt/bb/$USER/structures-all-\$SLURMD_NODENAME.tar ."
 
 set +x
 
