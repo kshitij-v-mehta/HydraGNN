@@ -8,14 +8,19 @@ Usage:
     python combine_adios.py
 """
 
-import glob, socket, getpass
+import sys, glob, socket, getpass
 import numpy as np
 import adios2.bindings as adios2
 from tqdm import tqdm
-from mpi4py import MPI
 
-INPUT_FILES  = glob.glob(f"/mnt/bb/{getpass.getuser()}/structures-*.bp")
-OUTPUT_FILE  = f"/mnt/bb/{getpass.getuser()}/structures-all-{MPI.COMM_WORLD.Get_rank()}.bp"
+
+local_cache_dir = f"/tmp/{getpass.getuser()}"
+if len(sys.argv) == 2:
+    local_cache_dir = sys.argv[1]
+
+
+INPUT_FILES  = glob.glob(f"{local_cache_dir}/inference_fused_results_gpu*.bp")
+OUTPUT_FILE  = f"{local_cache_dir}/inference_fused_results_all-{socket.gethostname()}.bp"
 
 VARS_1D_INT  = ["atom_types"]
 VARS_1D_FLT  = ["coordinates_x", "coordinates_y", "coordinates_z",
