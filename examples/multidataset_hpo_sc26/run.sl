@@ -95,15 +95,25 @@ fi
 echo "Using checkpoint log dir: $CHECKPOINT_LOGDIR"
 echo "Precision:                $INFER_PRECISION"
 
+
 srun -N $SLURM_JOB_NUM_NODES -n $SLURM_JOB_NUM_NODES bash -c "mkdir -p /tmp/kmehta/" 
 srun -N $SLURM_JOB_NUM_NODES -n $SLURM_JOB_NUM_NODES bash -c "rm -rf  /tmp/kmehta/*" 
+
+
+_struct_args="--min_atoms 2 --max_atoms 500 --box_size 10.0"
+_fused_args="--fused_energy_grad --encoder_reuse --num_streams 1 --profile_stages"
+
+
+NVME_DIR=/tmp/$USER
 
 cmd srun -N$SLURM_JOB_NUM_NODES -n$((SLURM_JOB_NUM_NODES*8)) -c7 --gpus-per-task=1 --gpu-bind=closest -l --kill-on-bad-exit=1 \
     --export=ALL,MASTER_ADDR=$MASTER_ADDR,MASTER_PORT=$MASTER_PORT,HYDRAGNN_MASTER_ADDR=$HYDRAGNN_MASTER_ADDR,HYDRAGNN_MASTER_PORT=$HYDRAGNN_MASTER_PORT,GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME,NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME \
     python -u "./inference_fused_write_adios.py" \
     --logdir "$CHECKPOINT_LOGDIR" \
     --num_structures 15050 \
-    --min_atoms 2 \
-    --max_atoms 500 \
     --batch_size $BATCH_SIZE \
-    --precision $INFER_PRECISION
+    --precision $INFER_PRECISION \
+    --nvme_dir $NVME_DIR \
+    ${_struct_args} \
+    ${_fused_args}
+
