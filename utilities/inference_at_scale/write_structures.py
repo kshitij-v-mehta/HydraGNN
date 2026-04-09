@@ -1,4 +1,4 @@
-import os, json
+import os, json, getpass
 import numpy as np
 import torch
 from mpi4py import MPI
@@ -7,8 +7,7 @@ from torch_geometric.data import Data
 
 N_STRUCTURES = 15000   # number of atomistic structures per rank
 FLUSH_EVERY = 50   # flush to disk every N structures
-# dirpath = "/mnt/bb/kmehta"
-dirpath = "/mnt/bb/kmehta"
+dirpath = f"/mnt/bb/{getpass.getuser()}"
 
 
 # --- Generate synthetic PyG structures ---
@@ -105,14 +104,14 @@ def write_adios(n_structures):
             for data in buffer:
                 write_adios_step(writer, vars, data)
             writer.PerformPuts()
-            print(f"  ADIOS flush: structures {i - len(buffer) + 1} to {i}")
+            # print(f"  ADIOS flush: structures {i - len(buffer) + 1} to {i}")
             buffer.clear()
 
     if buffer:                                       # final partial flush
         for data in buffer:
             write_adios_step(writer, vars, data)
         writer.PerformPuts()
-        print(f"  ADIOS flush: final {len(buffer)} structures")
+        # print(f"  ADIOS flush: final {len(buffer)} structures")
         buffer.clear()
 
     writer.Close()
