@@ -103,7 +103,7 @@ cmd srun -N$SLURM_JOB_NUM_NODES -n$((SLURM_JOB_NUM_NODES*8)) -c7 --gpus-per-task
     python -u "./inference_fused_write_adios.py" \
     --logdir "$CHECKPOINT_LOGDIR" \
     --num_structures 15050 \
-    --min_atoms 20 \
+    --min_atoms 2 \
     --max_atoms 500 \
     --batch_size $BATCH_SIZE \
     --precision $INFER_PRECISION
