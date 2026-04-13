@@ -19,8 +19,8 @@ HYDRAGNN_ROOT=/lustre/orion/world-shared/lrn070/jyc/frontier/HydraGNN
 module reset
 ml cpe/24.07
 ml cce/18.0.0
-ml rocm/6.4.0
-ml amd-mixed/6.4.0
+ml rocm/7.1.1
+ml amd-mixed/7.1.1
 ml craype-accel-amd-gfx90a
 ml PrgEnv-gnu
 ml miniforge3/23.11.0-0
@@ -45,9 +45,43 @@ echo ""
 echo "===== Check LD_LIBRARY_PATH ====="
 echo $LD_LIBRARY_PATH  | tr ':' '\n'
 
+echo "===== Performance envs ====="
+export PLUGIN_PATH=/ccs/sw/crusher/amdsw/aws-ofi-nccl/aws-ofi-nccl
+export LD_LIBRARY_PATH=${PLUGIN_PATH}/lib:${LD_LIBRARY_PATH}
+
+export FI_MR_CACHE_MONITOR=kdreg2     # Required to avoid a deadlock.
+export FI_CXI_DEFAULT_CQ_SIZE=131072  # Ask the network stack to allocate additional space to process message completions.
+export FI_CXI_DEFAULT_TX_SIZE=2048    # Ask the network stack to allocate additional space to hold pending outgoing messages.
+export FI_CXI_RX_MATCH_MODE=hybrid    # Allow the network stack to transition to software mode if necessary.
+export FI_CXI_RDV_PROTO=alt_read
+export FI_CXI_DISABLE_HOST_REGISTER=1
+
+export NCCL_NET_PLUGIN=${PLUGIN_PATH}/lib/librccl-net.so
+export NCCL_NET_GDR_LEVEL="PHB"       # Typically improves performance, but remove this setting if you encounter a hang/crash.
+export NCCL_CROSS_NIC=1               # On large systems, this NCCL setting has been found to improve performance
+export NCCL_SOCKET_IFNAME=hsn0        # NCCL/RCCL will use the high speed network to coordinate startup.
+export NCCL_NET="AWS Libfabric"
+
+export TORCH_NCCL_HIGH_PRIORITY=1     # Use high priority stream for the NCCL/RCCL Communicator.
+export GPU_MAX_HW_QUEUES=2
+
+export HSA_FORCE_FINE_GRAIN_PCIE=1
+
+# below are optional to debug RCCL stuff
+# export NCCL_DEBUG=INFO
+# export NCCL_DEBUG_SUBSYS=INIT
+
+# The following have been found to help avoid hangs, but are not yet
+# documented elsewhere
+export FI_CXI_RDZV_EAGER_SIZE=0
+export FI_CXI_RDZV_GET_MIN=0
+export FI_CXI_RDZV_THRESHOLD=0
+
+echo "===== HydraGNN envs ====="
 export MPICH_ENV_DISPLAY=0
 export MPICH_VERSION_DISPLAY=0
 export MIOPEN_DISABLE_CACHE=1
+export MIOPEN_USER_DB_PATH=/tmp
 export PYTHONNOUSERSITE=1
 
 export OMP_NUM_THREADS=7
@@ -66,8 +100,8 @@ export HYDRAGNN_FSDP_VERSION=2
 export HYDRAGNN_FSDP_STRATEGY=SHARD_GRAD_OP
 export HYDRAGNN_TRACE_LEVEL=1
 export HYDRAGNN_MAX_NUM_BATCH=100
-export BATCH_SIZE=200
-export NUM_EPOCH=20
+export BATCH_SIZE=2
+export NUM_EPOCH=4
 
 export HYDRAGNN_DDSTORE_METHOD=1
 export HYDRAGNN_CUSTOM_DATALOADER=1
@@ -104,14 +138,16 @@ MULTI_MODEL_LIST=$datadir0,$datadir1,$datadir2,$datadir3,$datadir4,$datadir5,$da
 cmd srun -N$SLURM_JOB_NUM_NODES -n$((SLURM_JOB_NUM_NODES*8)) -c7 --gpus-per-task=1 --gpu-bind=closest \
 python -u $HYDRAGNN_ROOT/examples/multidataset_hpo_sc26/gfm_mlip_all_mpnn.py \
     --log=multidataset_hpo-$SLURM_JOB_ID-NN$SLURM_JOB_NUM_NODES-FSDP$HYDRAGNN_USE_FSDP --everyone \
-    --inputfile=gfm_mlip.json --num_samples=$((BATCH_SIZE*HYDRAGNN_MAX_NUM_BATCH)) --oversampling_num_samples=$((BATCH_SIZE*HYDRAGNN_MAX_NUM_BATCH)) \
+    --inputfile=gfm_mlip.json --num_samples=$((BATCH_SIZE*HYDRAGNN_MAX_NUM_BATCH)) \
+    --oversampling --oversampling_num_samples=$((BATCH_SIZE*HYDRAGNN_MAX_NUM_BATCH)) \
     --multi --ddstore --multi_model_list=$MULTI_MODEL_LIST --batch_size=$BATCH_SIZE --num_epoch=$NUM_EPOCH \
     --precision=fp64 \
     --mpnn_type=SchNet \
     --num_conv_layers=6 \
     --hidden_dim=3000 \
     --num_headlayers=4 \
-    --dim_headlayers=2000
+    --dim_headlayers=2000 \
+    --learning_rate=0.001
 
 # (C) End of job: stop data collection
 ${OMNISTAT_WRAPPER} usermode --stop

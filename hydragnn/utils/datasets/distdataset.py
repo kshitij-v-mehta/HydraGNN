@@ -21,6 +21,54 @@ from io import BytesIO
 import os
 
 
+def allgatherv_numpy(send: np.ndarray, comm=MPI.COMM_WORLD):
+    """
+    Allgatherv for 1D NumPy arrays with variable lengths.
+
+    Parameters
+    ----------
+    send : np.ndarray
+        Local array (1D, contiguous)
+    comm : MPI.Comm
+        MPI communicator
+
+    Returns
+    -------
+    recv : np.ndarray
+        Concatenated array from all ranks
+    counts : np.ndarray
+        Number of elements from each rank
+    displs : np.ndarray
+        Displacements for each rank
+    """
+
+    # ensure contiguous
+    send = np.ascontiguousarray(send)
+
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+
+    # map dtype to MPI type
+    mpi_dtype = MPI._typedict[send.dtype.char]
+
+    # gather lengths
+    sendcount = np.array(send.size, dtype=np.int32)
+    recvcounts = np.empty(size, dtype=np.int32)
+    comm.Allgather([sendcount, MPI.INT], [recvcounts, MPI.INT])
+
+    # displacements
+    displs = np.zeros(size, dtype=np.int32)
+    displs[1:] = np.cumsum(recvcounts[:-1])
+
+    # allocate receive buffer
+    recv = np.empty(recvcounts.sum(), dtype=send.dtype)
+
+    # allgatherv
+    comm.Allgatherv([send, mpi_dtype], [recv, recvcounts, displs, mpi_dtype])
+
+    return recv
+
+
 class DistDataset(AbstractBaseDataset):
     """Distributed datasets class"""
 
@@ -52,7 +100,10 @@ class DistDataset(AbstractBaseDataset):
             # Using libfabric. Need a map each rank to a network interface
             iface = system = os.getenv("FABRIC_IFACE", None)
             if iface is None:
-                system = os.getenv("LMOD_SYSTEM_NAME", "none")
+                system = os.getenv("LMOD_SYSTEM_NAME", None)
+                if system is None and os.getenv("PBS_O_HOST", "none")[:6] == "aurora":
+                    system = "aurora"
+
                 if system == "frontier":
                     gpu_id = int(os.getenv("SLURM_LOCALID", "0"))
                     os.environ["FABRIC_IFACE"] = f"hsn{gpu_id//2}"
@@ -60,8 +111,8 @@ class DistDataset(AbstractBaseDataset):
                     gpu_id = int(os.getenv("SLURM_LOCALID", "0"))
                     os.environ["FABRIC_IFACE"] = f"hsn{gpu_id}"
                 elif system == "aurora":
-                    ## FIMXE
-                    pass
+                    gpu_id = int(os.getenv("PALS_LOCAL_RANKID", "0"))
+                    os.environ["FABRIC_IFACE"] = f"hsn{gpu_id//2}"
 
             print("FABRIC_IFACE:", os.environ["FABRIC_IFACE"])
 
@@ -74,13 +125,13 @@ class DistDataset(AbstractBaseDataset):
         ## set total before set subset
         if self.local:
             local_ns = len(data)
-            local_ns_list = self.comm.allgather(local_ns)
+            local_ns_list = self.ddstore_comm.allgather(local_ns)
             maxrank = np.argmax(local_ns_list).item()
             for i in tqdm(
                 range(local_ns), desc="Loading", disable=(self.rank != maxrank)
             ):
                 self.dataset.append(data[i])
-            self.total_ns = self.comm.allreduce(local_ns, op=MPI.SUM)
+            self.total_ns = self.ddstore_comm.allreduce(local_ns, op=MPI.SUM)
         else:
             self.total_ns = len(data)
             rx = list(nsplit(range(len(data)), self.ddstore_comm_size))[
@@ -131,7 +182,7 @@ class DistDataset(AbstractBaseDataset):
             if len(vdims) > 0:
                 vdim = vdims[0]
             ## vdim should be globally equal
-            vdim = self.comm.allreduce(vdim, op=MPI.MAX)
+            vdim = self.ddstore_comm.allreduce(vdim, op=MPI.MAX)
             val = np.concatenate(arr_list, axis=vdim)
             if not val.flags["C_CONTIGUOUS"]:
                 val = np.ascontiguousarray(val)
@@ -141,10 +192,11 @@ class DistDataset(AbstractBaseDataset):
             self.variable_dim[k] = vdim
             self.variable_dtype[k] = val.dtype
 
-            vcount = np.array([x.shape[vdim] for x in arr_list])
+            vcount = np.array([x.shape[vdim] for x in arr_list], dtype=np.int32)
             assert len(vcount) == len(self.dataset)
             vcount_list = self.ddstore_comm.allgather(vcount)
-            vcount = np.hstack(vcount_list)
+            # vcount_list = allgatherv_numpy(vcount, comm=self.ddstore_comm)
+            vcount = np.hstack(vcount_list).astype(np.int64)
             self.variable_count[k] = vcount
 
             offset_arr = np.zeros_like(vcount)
@@ -178,7 +230,7 @@ class DistDataset(AbstractBaseDataset):
             buf = BytesIO()
             if self.local:
                 ## local_ns_list is a list of local_ns from all ranks, which is calculated in the above.
-                start_idx = int(np.sum(local_ns_list[: self.rank]))
+                start_idx = int(np.sum(local_ns_list[: self.ddstore_comm_rank]))
                 rx = list(range(start_idx, start_idx + local_ns))
             else:
                 rx = list(nsplit(list(range(self.total_ns)), self.ddstore_comm_size))[
@@ -225,7 +277,7 @@ class DistDataset(AbstractBaseDataset):
                 local_record_count.append(dtype.itemsize)
                 buf.write(record_array.tobytes())
 
-            record_count = self.comm.allgather(local_record_count)
+            record_count = self.ddstore_comm.allgather(local_record_count)
             self.record_count = np.hstack(record_count)
             self.record_offset = self.record_count.cumsum()
 

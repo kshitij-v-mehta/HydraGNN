@@ -500,6 +500,7 @@ pip_retry rdkit jarvis-tools pymatgen || true
 pip_retry igraph || true
 
 pip_retry e3nn openequivariance
+pip_retry vesin
 pip_retry Cython
 pip_retry setuptools wheel
 
@@ -514,6 +515,10 @@ PY
 # ============================================================
 # GPTL
 # ============================================================
+GPTL_SRC_DIR="${INSTALL_ROOT}/gptl-src"
+mkdir -p "$GPTL_SRC_DIR"
+pushd "$GPTL_SRC_DIR" >/dev/null
+
 wget https://github.com/jmrosinski/GPTL/releases/download/v8.1.1/gptl-8.1.1.tar.gz
 tar xvf gptl-8.1.1.tar.gz
 pushd gptl-8.1.1 >/dev/null
@@ -522,6 +527,7 @@ automake --add-missing
 autoconf
 ./configure --prefix=$VENV_PATH --disable-libunwind CC=mpicc CXX=mpicxx FC=mpifort
 make install
+popd >/dev/null
 popd >/dev/null
 
 GPTL_DIR=$VENV_PATH CC=mpicc CXX=mpicxx pip_retry git+https://github.com/jychoi-hpc/gptl4py.git --no-build-isolation --verbose

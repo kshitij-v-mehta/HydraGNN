@@ -46,21 +46,23 @@ HYDRAGNN_ROOT=/lustre/orion/world-shared/lrn070/jyc/frontier/HydraGNN
 module reset
 ml cpe/24.07
 ml cce/18.0.0
-ml rocm/6.4.0
-ml amd-mixed/6.4.0
+ml rocm/7.1.1
+ml amd-mixed/7.1.1
 ml craype-accel-amd-gfx90a
 ml PrgEnv-gnu
 ml miniforge3/23.11.0-0
 module unload darshan-runtime
 
-source activate $HYDRAGNN_ROOT/HydraGNN-Installation-Frontier/hydragnn_venv
 setup_bb
 if [ -d /mnt/bb/${USER}/HydraGNN-Installation-Frontier ]; then
-    export PYTHONPATH=/mnt/bb/${USER}/HydraGNN-Installation-Frontier/hydragnn_venv/lib/python3.11/site-packages/:$PYTHONPATH
-    export PATH=/mnt/bb/${USER}/HydraGNN-Installation-Frontier/hydragnn_venv/bin/:$PATH
+    source activate /mnt/bb/${USER}/HydraGNN-Installation-Frontier/hydragnn_venv
+    # export PYTHONPATH=/mnt/bb/${USER}/HydraGNN-Installation-Frontier/hydragnn_venv/lib/python3.11/site-packages/:$PYTHONPATH
+    # export PATH=/mnt/bb/${USER}/HydraGNN-Installation-Frontier/hydragnn_venv/bin/:$PATH
+else
+    source activate $HYDRAGNN_ROOT/HydraGNN-Installation-Frontier/hydragnn_venv
 fi
 
-#export python path to HydragNN
+# Add HydraGNN in PYTHONPATH
 export PYTHONPATH=$HYDRAGNN_ROOT:$PYTHONPATH
 
 echo ""
@@ -77,9 +79,43 @@ echo ""
 echo "===== Check LD_LIBRARY_PATH ====="
 echo $LD_LIBRARY_PATH  | tr ':' '\n'
 
+echo "===== Performance envs ====="
+export PLUGIN_PATH=/ccs/sw/crusher/amdsw/aws-ofi-nccl/aws-ofi-nccl
+export LD_LIBRARY_PATH=${PLUGIN_PATH}/lib:${LD_LIBRARY_PATH}
+
+export FI_MR_CACHE_MONITOR=kdreg2     # Required to avoid a deadlock.
+export FI_CXI_DEFAULT_CQ_SIZE=131072  # Ask the network stack to allocate additional space to process message completions.
+export FI_CXI_DEFAULT_TX_SIZE=2048    # Ask the network stack to allocate additional space to hold pending outgoing messages.
+export FI_CXI_RX_MATCH_MODE=hybrid    # Allow the network stack to transition to software mode if necessary.
+export FI_CXI_RDV_PROTO=alt_read
+export FI_CXI_DISABLE_HOST_REGISTER=1
+
+export NCCL_NET_PLUGIN=${PLUGIN_PATH}/lib/librccl-net.so
+export NCCL_NET_GDR_LEVEL="PHB"       # Typically improves performance, but remove this setting if you encounter a hang/crash.
+export NCCL_CROSS_NIC=1               # On large systems, this NCCL setting has been found to improve performance
+export NCCL_SOCKET_IFNAME=hsn0        # NCCL/RCCL will use the high speed network to coordinate startup.
+export NCCL_NET="AWS Libfabric"
+
+export TORCH_NCCL_HIGH_PRIORITY=1     # Use high priority stream for the NCCL/RCCL Communicator.
+export GPU_MAX_HW_QUEUES=2
+
+export HSA_FORCE_FINE_GRAIN_PCIE=1
+
+# below are optional to debug RCCL stuff
+# export NCCL_DEBUG=INFO
+# export NCCL_DEBUG_SUBSYS=INIT
+
+# The following have been found to help avoid hangs, but are not yet
+# documented elsewhere
+export FI_CXI_RDZV_EAGER_SIZE=0
+export FI_CXI_RDZV_GET_MIN=0
+export FI_CXI_RDZV_THRESHOLD=0
+
+echo "===== HydraGNN envs ====="
 export MPICH_ENV_DISPLAY=0
 export MPICH_VERSION_DISPLAY=0
 export MIOPEN_DISABLE_CACHE=1
+export MIOPEN_USER_DB_PATH=/tmp
 export PYTHONNOUSERSITE=1
 
 export OMP_NUM_THREADS=7
@@ -142,14 +178,17 @@ mkdir -p $DEEPHYPER_LOG_DIR
 # (A) Setup omnistat sampling environment
 ml use /sw/frontier/amdsw/modulefiles/
 ml omnistat-wrapper
+export OMNISTAT_DIR=$OMNISTAT_DIR
 export OMNISTAT_CONFIG=$HYDRAGNN_ROOT/omnistat.hydragnn-external-fp64.config
 
 # (B) Enable data collectors and polling (1 sec interval)
 ${OMNISTAT_WRAPPER} usermode --start --interval 15
 
+# [ -z $MPNN_TYPE ] && MPNN_TYPE=EGNN,SchNet,DimeNet,MACE,PAINN,PNAEq
+[ -z $MPNN_TYPE ] && MPNN_TYPE=SchNet
+
 cmd python -u $HYDRAGNN_ROOT/examples/multidataset_hpo_sc26/gfm_deephyper_multi_all_mpnn.py \
-    --mpnn_type=SchNet
-    # --mpnn_type=EGNN,SchNet,DimeNet,MACE,PAINN,PNAEq
+    --mpnn_type=$MPNN_TYPE
 
 # (C) End of job: stop data collection
 ${OMNISTAT_WRAPPER} usermode --stop

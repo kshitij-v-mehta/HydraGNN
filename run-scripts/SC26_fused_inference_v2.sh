@@ -55,6 +55,8 @@
 #SBATCH -t 02:00:00
 #SBATCH -p batch
 #SBATCH -C nvme
+#SBATCH --mail-type=BEGIN
+#SBATCH --mail-type=END
 
 set -euo pipefail
 
@@ -65,29 +67,40 @@ set -euo pipefail
 PRECISION=${PRECISION:-fp64}
 INFER_BATCH_SIZE=${INFER_BATCH_SIZE:-50}
 INFER_NUM_STRUCTURES=${INFER_NUM_STRUCTURES:-15000}
-INFER_SCRIPT=${INFER_SCRIPT:-inference_fused_write_json.py}
+INFER_SCRIPT=${INFER_SCRIPT:-inference_fused_write_adios.py}
 
-HYDRAGNN_ROOT=${HYDRAGNN_ROOT:-"$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"}
+HYDRAGNN_ROOT=${HYDRAGNN_ROOT:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"}
 EXAMPLE_DIR=${EXAMPLE_DIR:-$HYDRAGNN_ROOT/examples/multidataset_hpo_sc26}
 
-CHECKPOINT_LOGDIR=${CHECKPOINT_LOGDIR:-/work1/amd/omnihub/hydragnn/sc26}
+CHECKPOINT_LOGDIR=${CHECKPOINT_LOGDIR:-$HYDRAGNN_ROOT/logs/multidataset_hpo-BEST6-fp64}
 MLP_CHECKPOINT=${MLP_CHECKPOINT:-"${CHECKPOINT_LOGDIR}/mlp_branch_weights.pt"}
 
-CONDA_ENV=${CONDA_ENV:-/work1/amd/aaji/miniconda3/envs/hydragnn_rocm71}
-
-RESULTS_DIR=${RESULTS_DIR:-"/lustre/orion/${SLURM_JOB_ACCOUNT}/scratch/${USER}/hydragnn/fused_${SLURM_JOB_ID}"}
+# CONDA_ENV=${CONDA_ENV:-/lustre/orion/world-shared/lrn070/jyc/frontier/HydraGNN-infer/HydraGNN-Installation-Frontier/hydragnn_venv}
+RESULTS_DIR=${RESULTS_DIR:-"${HYDRAGNN_ROOT}/fused_${SLURM_JOB_ID}"}
 
 # ============================================================================
 # Module environment
 # ============================================================================
 
+#module reset
+#module load rocm/7.2.0
+#module load craype-accel-amd-gfx90a
+#module unload darshan-runtime
+
+# Load conda environment
 module reset
-module load rocm/7.2.0
-module load craype-accel-amd-gfx90a
+ml cpe/24.07
+ml cce/18.0.0
+ml rocm/7.1.1
+ml amd-mixed/7.1.1
+ml craype-accel-amd-gfx90a
+ml PrgEnv-gnu
+ml miniforge3/23.11.0-0
 module unload darshan-runtime
 
 module use /sw/frontier/amdsw/modulefiles
 module load omnistat-wrapper
+
 
 # Unset proxies — Omnistat's internal server communication breaks behind proxies
 # (see Frontier User Guide / Omnistat section)
@@ -98,12 +111,18 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY proxy no_proxy all_proxy ftp
 # ============================================================================
 
 # shellcheck source=/dev/null
-source "${CONDA_ENV}/bin/activate"
+source activate ${HYDRAGNN_ROOT}/HydraGNN-Installation-Frontier/hydragnn_venv
 
-export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib64:${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+# export LD_LIBRARY_PATH="${CONDA_ENV}/lib64:${CONDA_ENV}/lib:${LD_LIBRARY_PATH:-}"
 export PYTHONPATH="${HYDRAGNN_ROOT}:${EXAMPLE_DIR}:${PYTHONPATH:-}"
 
-PYTHON_BIN=${PYTHON_BIN:-"${CONDA_PREFIX}/bin/python"}
+PYTHON_BIN=$(which python)
+
+echo ""
+echo "===== Check ====="
+which python
+python -c "import adios2; print(adios2.__version__, adios2.__file__)"
+python -c "import torch; print(torch.__version__, torch.__file__)"
 
 # ============================================================================
 # Runtime environment
@@ -213,8 +232,9 @@ NTASKS=$((NNODES * GPUS_PER_NODE))
 
 _nvme_args=""
 NVME_DIR=""
-if [[ "$INFER_SCRIPT" == *write_json* ]]; then
-    NVME_DIR="/mnt/bb/${USER}/hydragnn_${SLURM_JOB_ID}"
+if [[ "$INFER_SCRIPT" == *write_adios* ]]; then
+    NVME_DIR="/tmp/${USER}/hydragnn_${SLURM_JOB_ID}"
+    mkdir -p $NVME_DIR
     _nvme_args="--nvme_dir ${NVME_DIR}"
     echo "NVME_DIR=$NVME_DIR (node-local, staged out to Lustre after inference)"
 fi
@@ -238,7 +258,7 @@ echo "INFER_BATCH_SIZE=$INFER_BATCH_SIZE"
 echo "INFER_NUM_STRUCTURES=$INFER_NUM_STRUCTURES"
 echo "INFER_SCRIPT=$INFER_SCRIPT"
 echo "RESULTS_DIR=$RESULTS_DIR"
-echo "CONDA_PREFIX=$CONDA_PREFIX"
+# echo "CONDA_ENV=$CONDA_ENV"
 echo "PYTHON_BIN=$PYTHON_BIN"
 echo "============================================================"
 env | grep '^\SLURM_' | sort || true
@@ -274,36 +294,18 @@ set -e
 echo "Inference srun exit code: $_srun_exit"
 
 # ============================================================================
-# Stage-out: copy JSON results from each node's NVMe to Lustre
+# Stage-out: copy ADIOS results from each node's NVMe to Lustre
 # ============================================================================
 
-if [ -n "$NVME_DIR" ]; then
-    echo "Stage-out: copying JSON from NVMe to $RESULTS_DIR/json/ ..."
-    _stageout_start=$(date +%s)
+# Combine the 8 files in /tmp into a new file in /tmp
+time srun -n $SLURM_JOB_NUM_NODES -N $SLURM_JOB_NUM_NODES python3 -u $EXAMPLE_DIR/combine_adios.py $NVME_DIR
 
-    srun -N"$NNODES" -n"$NNODES" --ntasks-per-node=1 -l --kill-on-bad-exit=0 \
-        bash -c "
-            _host=\$(hostname)
-            _dst=${RESULTS_DIR}/json/\${_host}
-            mkdir -p \${_dst}
-            if [ -d \"${NVME_DIR}\" ]; then
-                cp ${NVME_DIR}/* \${_dst}/ 2>/dev/null && \
-                    echo \"[\${_host}] Staged out \$(ls ${NVME_DIR} | wc -l) files\" || \
-                    echo \"[\${_host}] No files to stage out\"
-            else
-                echo \"[\${_host}] NVME_DIR not found: ${NVME_DIR}\"
-            fi
-        "
+# Combine all files into a single tar file on each node
+time srun -n $SLURM_JOB_NUM_NODES -N $SLURM_JOB_NUM_NODES bash -c "cd $NVME_DIR && tar -cf inference_fused_results-\$SLURMD_NODENAME.tar inference_fused_results_all-*.bp"
 
-    _stageout_end=$(date +%s)
-    echo "Stage-out completed in $((_stageout_end - _stageout_start)) seconds"
+# Copy the combined file to Orion
+time srun -n $SLURM_JOB_NUM_NODES -N $SLURM_JOB_NUM_NODES bash -c "cp -r $NVME_DIR/inference_fused_results-\$SLURMD_NODENAME.tar $RESULTS_DIR/."
 
-    # Clean up NVMe on every node
-    echo "Cleaning up NVMe on all nodes ..."
-    srun -N"$NNODES" -n"$NNODES" --ntasks-per-node=1 --kill-on-bad-exit=0 \
-        rm -rf "$NVME_DIR"
-    echo "NVMe cleanup complete"
-fi
 
 # ============================================================================
 # Omnistat teardown — stop exporters, query data, stop server
@@ -321,9 +323,6 @@ fi
 echo "============================================================"
 echo "Job complete.  Exit code: $_srun_exit"
 echo "Results:       $RESULTS_DIR"
-if [ -n "$NVME_DIR" ]; then
-    echo "JSON output:   $RESULTS_DIR/json/"
-fi
 echo "============================================================"
 
 exit "$_srun_exit"

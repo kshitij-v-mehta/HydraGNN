@@ -49,7 +49,7 @@ from inference_fused import (
 # ADIOS2 setup
 # ---------------------------------------------------------------------------
 
-NUM_BRANCHES = 16   # must match MLP output dimension
+NUM_BRANCHES = 16  # must match MLP output dimension
 
 
 def _open_adios_writer(nvme_path: str):
@@ -67,24 +67,30 @@ def _open_adios_writer(nvme_path: str):
     dummy_i = np.zeros(1, dtype=np.int32)
 
     vars = {
-        "atom_types":       io.DefineVariable("atom_types",       dummy_i, [1], [0], [1]),
-        "coordinates_x":    io.DefineVariable("coordinates_x",    dummy_f, [1], [0], [1]),
-        "coordinates_y":    io.DefineVariable("coordinates_y",    dummy_f, [1], [0], [1]),
-        "coordinates_z":    io.DefineVariable("coordinates_z",    dummy_f, [1], [0], [1]),
-        "forces_x":         io.DefineVariable("forces_x",         dummy_f, [1], [0], [1]),
-        "forces_y":         io.DefineVariable("forces_y",         dummy_f, [1], [0], [1]),
-        "forces_z":         io.DefineVariable("forces_z",         dummy_f, [1], [0], [1]),
-        "formation_energy": io.DefineVariable("formation_energy", dummy_f, [1], [0], [1]),
-        "branch_weights":   io.DefineVariable(
+        "atom_types": io.DefineVariable("atom_types", dummy_i, [1], [0], [1]),
+        "coordinates_x": io.DefineVariable("coordinates_x", dummy_f, [1], [0], [1]),
+        "coordinates_y": io.DefineVariable("coordinates_y", dummy_f, [1], [0], [1]),
+        "coordinates_z": io.DefineVariable("coordinates_z", dummy_f, [1], [0], [1]),
+        "forces_x": io.DefineVariable("forces_x", dummy_f, [1], [0], [1]),
+        "forces_y": io.DefineVariable("forces_y", dummy_f, [1], [0], [1]),
+        "forces_z": io.DefineVariable("forces_z", dummy_f, [1], [0], [1]),
+        "formation_energy": io.DefineVariable(
+            "formation_energy", dummy_f, [1], [0], [1]
+        ),
+        "branch_weights": io.DefineVariable(
             "branch_weights",
             np.zeros(NUM_BRANCHES, dtype=np.float64),
-            [NUM_BRANCHES], [0], [NUM_BRANCHES],
+            [NUM_BRANCHES],
+            [0],
+            [NUM_BRANCHES],
         ),
     }
     return a, io, writer, vars
 
 
-def _write_structure_step(writer, vars, atom_types, coords, forces, energy, branch_weights):
+def _write_structure_step(
+    writer, vars, atom_types, coords, forces, energy, branch_weights
+):
     """Write one structure as one ADIOS2 step.
 
     All per-atom arrays are resized to N via SetShape + SetSelection.
@@ -94,13 +100,13 @@ def _write_structure_step(writer, vars, atom_types, coords, forces, energy, bran
 
     # Resize per-atom variables to current atom count
     per_atom = [
-        ("atom_types",    atom_types),
+        ("atom_types", atom_types),
         ("coordinates_x", coords[:, 0]),
         ("coordinates_y", coords[:, 1]),
         ("coordinates_z", coords[:, 2]),
-        ("forces_x",      forces[:, 0]),
-        ("forces_y",      forces[:, 1]),
-        ("forces_z",      forces[:, 2]),
+        ("forces_x", forces[:, 0]),
+        ("forces_y", forces[:, 1]),
+        ("forces_z", forces[:, 2]),
     ]
     for name, arr in per_atom:
         vars[name].SetShape([N])
@@ -110,13 +116,14 @@ def _write_structure_step(writer, vars, atom_types, coords, forces, energy, bran
     for name, arr in per_atom:
         writer.Put(vars[name], arr)
     writer.Put(vars["formation_energy"], energy)
-    writer.Put(vars["branch_weights"],   branch_weights)
+    writer.Put(vars["branch_weights"], branch_weights)
     writer.EndStep()
 
 
 # ---------------------------------------------------------------------------
 # Background NVMe writer (runs in the thread pool)
 # ---------------------------------------------------------------------------
+
 
 def _write_batch_entries(
     writer,
@@ -169,6 +176,7 @@ def _write_batch_entries(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = build_argument_parser(
         description="Fused HydraGNN + MLP inference – ADIOS2 BP5 output to NVMe"
@@ -186,7 +194,7 @@ def main():
         type=int,
         default=1000,
         help="Call PerformPuts() every N structures to bound ADIOS buffer memory "
-             "(default: 1000). Set to 0 to disable mid-batch flushing.",
+        "(default: 1000). Set to 0 to disable mid-batch flushing.",
     )
     args = parser.parse_args()
 
@@ -269,9 +277,8 @@ def main():
         struct_offset[0] += n
 
         # Flush if this batch would push us past a flush_every boundary
-        should_flush = (
-            flush_every is not None
-            and (offset // flush_every) != ((offset + n - 1) // flush_every)
+        should_flush = flush_every is not None and (offset // flush_every) != (
+            (offset + n - 1) // flush_every
         )
 
         fut = executor.submit(
@@ -325,11 +332,17 @@ def main():
         per_batch_callback=_on_batch,
         omnistat_fom_url=omnistat_fom_url,
         omnistat_fom_gpu_id=local_gpu_id,
+        disable_param_grad=args.disable_param_grad,
+        batched_decoder=args.batched_decoder,
+        compile_encoder=args.compile_encoder,
+        compile_decoder=args.compile_decoder,
+        compile_full=args.compile_full,
+        compile_backend=args.compile_backend,
     )
 
     # --- Drain the thread pool before closing the writer ---
     for fut in futures:
-        fut.result()   # re-raises any exception from the background thread
+        fut.result()  # re-raises any exception from the background thread
     executor.shutdown(wait=True)
 
     writer.Close()
@@ -354,4 +367,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
