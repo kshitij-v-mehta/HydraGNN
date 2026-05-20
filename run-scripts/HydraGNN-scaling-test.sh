@@ -86,16 +86,18 @@ export HYDRAGNN_NUM_WORKERS=2
 if [ ! -d $HYDRAGNN_ROOT/examples/multidataset_hpo_sc26/dataset/OC2020-v2.bp ]; then
     pushd $HYDRAGNN_ROOT/examples/multidataset_hpo_sc26 > /dev/null
     [ ! -d dataset ] && mkdir -p dataset
-    ln -snf /lustre/orion/lrn070/world-shared/kmehta/hydragnn/datasets/v2/OC2020-v2.bp dataset/OC2020-v2.bp
+    ln -snf /lustre/orion/lrn070/world-shared/kmehta/hydragnn/datasets/v2/*.bp dataset/
     popd > /dev/null
 fi
 
-MULTI_MODEL_LIST=$datadir3
+## Full list of datasets
+# MULTI_MODEL_LIST=Alexandria,ANI1x,MPTrj,OC2020,OC2022,OC25,ODAC23,OMat24,OMol25-neutral,OMol25-non-neutral,OMol25,OPoly2026,QCML,QM7X,transition1x
+MULTI_MODEL_LIST=OC2020
 
 cmd srun -N$SLURM_JOB_NUM_NODES -n$((SLURM_JOB_NUM_NODES*8)) -c7 --gpus-per-task=1 --gpu-bind=closest \
 python -u $HYDRAGNN_ROOT/examples/multidataset_hpo_sc26/gfm_mlip_all_mpnn.py \
     --log=multidataset_hpo-${SLURM_JOB_ID}-NN${SLURM_JOB_NUM_NODES} --everyone \
     --inputfile=gfm_mlip.json --num_samples=$((BATCH_SIZE*HYDRAGNN_MAX_NUM_BATCH)) \
     --oversampling --oversampling_num_samples=$((BATCH_SIZE*HYDRAGNN_MAX_NUM_BATCH)) \
-    --multi --ddstore --multi_model_list=OC2020 --batch_size=$BATCH_SIZE --num_epoch=$NUM_EPOCH \
+    --multi --ddstore --multi_model_list=$MULTI_MODEL_LIST --batch_size=$BATCH_SIZE --num_epoch=$NUM_EPOCH \
     --precision=fp64 --startfrom="none"
